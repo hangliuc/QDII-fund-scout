@@ -42,8 +42,8 @@ class WechatAdapter(BaseAdapter):
         if not self.webhook_url:
             return False
         payload = {
-            "msg_type": "markdown",
-            "markdown": {"content": "### 🔔 QDII-fund-scout 连接测试\n> 企业微信适配器连接成功 ✅"},
+            "msgtype": "markdown",
+            "markdown": {"content": "### QDII-fund-scout 连接测试\n> 企业微信适配器连接成功"},
         }
         try:
             resp = requests.post(self.webhook_url, json=payload, timeout=10)
@@ -55,66 +55,79 @@ class WechatAdapter(BaseAdapter):
 
     def _build_markdown(self, data: FundDataResult) -> dict[str, Any]:
         lines = []
-        lines.append(f"### 📊 QDII 基金日报")
-        lines.append(f"> 📅 <font color=\"info\">{data.update_date}</font>  ·  共 {data.count} 只基金")
+        lines.append(f"### QDII 基金数据")
+        lines.append(f"> {data.update_date}  ·  共 {data.count} 只基金")
         lines.append("")
 
-        lines.append("| 基金 | 申购 | 近1年 | 限额 |")
-        lines.append("|:-----|:----:|:-----:|:----:|")
+        sorted_funds = sorted(
+            data.funds,
+            key=lambda f: WechatAdapter._to_float(f.return_1y) or float("-inf"),
+            reverse=True,
+        )
 
-        for fund in data.funds:
+        fund_blocks: list[str] = []
+
+        for idx, fund in enumerate(sorted_funds):
             name = fund.short_name or fund.name or "-"
-            if len(name) > 8:
-                name = name[:8]
+            code = fund.code
 
-            if fund.purchase_status == "开放":
-                status = "开放"
-            elif fund.purchase_status == "限大额":
-                status = "限大额"
-            elif fund.purchase_status == "限小额":
-                status = "限小额"
-            elif fund.purchase_status == "暂停":
-                status = "暂停"
+            r1y_val = WechatAdapter._to_float(fund.return_1y)
+            if r1y_val is not None:
+                r1y_color = "warning" if r1y_val > 0 else "info"
+                r1y_line = f'近1年: <font color="{r1y_color}">{WechatAdapter._fmt_return(fund.return_1y)}</font>'
             else:
-                status = fund.purchase_status or "-"
+                r1y_line = "近1年: -"
 
-            r1y = self._fmt_return(fund.return_1y)
-            limit = fund.purchase_limit or "-"
-            if not fund.purchase_limit or fund.purchase_limit in ("无限制", ""):
-                limit = "-"
+            if fund.purchase_status == "暂停":
+                status_line = '<font color="warning">申购: 暂停</font>'
+                limit_line = '<font color="warning">限额: 暂停</font>'
+            elif fund.purchase_status == "开放":
+                status_line = '<font color="info">申购: 开放</font>'
+                limit_line = '<font color="info">限额: 无限制</font>'
+            else:
+                status_line = f'<font color="info">申购: {fund.purchase_status}</font>'
+                limit_val = fund.purchase_limit or "-"
+                limit_line = f'<font color="info">限额: {limit_val}</font>'
 
-            lines.append(f"| {name}({fund.code}) | {status} | {r1y} | {limit} |")
+            fund_blocks.append(
+                f"**{idx + 1}. {name}** {code}\n"
+                f"{r1y_line}  |  {status_line}  |  {limit_line}"
+            )
+
+        lines.append("\n---\n".join(fund_blocks))
 
         lines.append("")
-
-        if data._warnings:
-            for w in data._warnings:
-                lines.append(f"> ⚠️ {w}")
-            lines.append("")
-
         lines.append(f"> <font color=\"comment\">{DISCLAIMER}</font>")
 
         return {
-            "msg_type": "markdown",
+            "msgtype": "markdown",
             "markdown": {"content": "\n".join(lines)},
         }
 
     def _build_text(self, data: FundDataResult) -> dict[str, Any]:
-        lines = [f"📊 QDII 基金数据日报 {data.update_date}", ""]
-        for fund in data.funds:
-            name = fund.short_name or fund.name
-            r1y = self._fmt_return(fund.return_1y)
+        lines = [f"QDII 基金数据 {data.update_date}  ·  共 {data.count} 只基金", ""]
+        sorted_funds = sorted(
+            data.funds,
+            key=lambda f: WechatAdapter._to_float(f.return_1y) or float("-inf"),
+            reverse=True,
+        )
+        for idx, fund in enumerate(sorted_funds):
+            name = fund.short_name or fund.name or "-"
+            r1y = WechatAdapter._fmt_return(fund.return_1y)
             status = fund.purchase_status
-            lines.append(f"  {fund.code} {name}")
-            lines.append(f"    净值:{fund.nav:.4f if fund.nav else '-'} 年:{r1y} 申购:{status}")
+            limit = fund.purchase_limit or "-"
+            if not fund.purchase_limit or fund.purchase_limit in ("无限制", ""):
+                limit = "-"
+            lines.append(f"{idx + 1}. {name} {fund.code}")
+            lines.append(f"   近1年: {r1y}  申购: {status}  限额: {limit}")
         if data._warnings:
             lines.append("")
             for w in data._warnings:
-                lines.append(f"⚠️ {w}")
+                lines.append(f"  {w}")
         lines.append("")
         lines.append(DISCLAIMER)
         return {
-            "msg_type": "text",
+            "msgtype": "text",
             "text": {"content": "\n".join(lines)},
         }
 

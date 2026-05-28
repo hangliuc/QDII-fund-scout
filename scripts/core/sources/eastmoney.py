@@ -293,7 +293,10 @@ class EastMoneySource(BaseSource):
     def _parse_purchase_status(self, html: str) -> dict:
         result = {"purchase_status": "未知", "purchase_limit": "", "effectively_closed": False}
 
-        m = re.search(r'限大额\s*\(<span>单日累计购买上限([\d.,]+)(万?)元</span>\)', html)
+        m = re.search(
+            r'限大额\s*\([^)]*单日累计购买上限([\d.,]+)(万?)元[^)]*\)',
+            html,
+        )
         if m:
             amt = float(m.group(1).replace(",", ""))
             unit = m.group(2)
@@ -303,19 +306,35 @@ class EastMoneySource(BaseSource):
             else:
                 result["purchase_limit"] = f"{amt:g}元"
                 result["purchase_status"] = "限小额"
-                if amt <= 1000:
-                    result["effectively_closed"] = True
             return result
 
-        if re.search(r'<span class="staticCell">暂停申购', html):
+        if re.search(r'暂停申购', html):
             result["purchase_status"] = "暂停"
             result["purchase_limit"] = "0"
             result["effectively_closed"] = True
             return result
 
-        if re.search(r'<span class="staticCell">开放申购', html):
+        if re.search(r'开放申购', html):
             result["purchase_status"] = "开放"
             result["purchase_limit"] = "无限制"
+            return result
+
+        m = re.search(r'单日累计购买上限[（(]?([\d.,]+)(万?)元[）)]?', html)
+        if m:
+            amt = float(m.group(1).replace(",", ""))
+            unit = m.group(2)
+            if unit == "万":
+                result["purchase_limit"] = f"{amt:g}万"
+                result["purchase_status"] = "限大额"
+            else:
+                result["purchase_limit"] = f"{amt:g}元"
+                result["purchase_status"] = "限小额"
+            return result
+
+        if re.search(r'class="fix_buy unbuy"', html):
+            result["purchase_status"] = "暂停"
+            result["purchase_limit"] = "0"
+            result["effectively_closed"] = True
             return result
 
         return result
