@@ -72,22 +72,15 @@ class FeishuAdapter(BaseAdapter):
             },
         })
 
-        elements.append({"tag": "hr"})
-
         sorted_funds = sorted(
             data.funds,
             key=lambda f: self._to_float(f.return_1y) or float("-inf"),
             reverse=True,
         )
 
-        rank_col: list[str] = ["**#**"]
-        name_col: list[str] = ["**基金**"]
-        return_col: list[str] = ["**近1年**"]
-        status_col: list[str] = ["**申购**"]
-        limit_col: list[str] = ["**限额**"]
-
         for idx, fund in enumerate(sorted_funds):
             name = fund.short_name or fund.name or "-"
+            code = fund.code
 
             r1y_val = self._to_float(fund.return_1y)
             if r1y_val is not None:
@@ -96,73 +89,32 @@ class FeishuAdapter(BaseAdapter):
             else:
                 r1y_display = "-"
 
-            if fund.purchase_status == "开放":
-                status_display = '<font color="green">开放</font>'
-                limit_display = '<font color="green">无限制</font>'
-            elif fund.purchase_status == "限大额":
-                status_display = '<font color="green">限大额</font>'
-                limit_display = f'<font color="green">{fund.purchase_limit}</font>'
-            elif fund.purchase_status == "限小额":
-                status_display = '<font color="green">限小额</font>'
-                limit_display = f'<font color="green">{fund.purchase_limit}</font>'
-            elif fund.purchase_status == "暂停":
+            if fund.purchase_status == "暂停":
                 status_display = '<font color="red">暂停</font>'
                 limit_display = '<font color="red">暂停</font>'
+            elif fund.purchase_status == "开放":
+                status_display = '<font color="green">开放</font>'
+                limit_display = '<font color="green">无限制</font>'
             else:
-                status_display = '<font color="red">未知</font>'
-                limit_display = '<font color="red">-</font>'
+                status_display = f'<font color="green">{fund.purchase_status}</font>'
+                limit_val = fund.purchase_limit or "-"
+                limit_display = f'<font color="green">{limit_val}</font>'
 
-            rank_col.append(str(idx + 1))
-            name_col.append(f"{name} {fund.code}")
-            return_col.append(r1y_display)
-            status_col.append(status_display)
-            limit_col.append(limit_display)
+            elements.append({"tag": "hr"})
 
-        elements.append({
-            "tag": "column_set",
-            "flex_mode": "none",
-            "background_style": "default",
-            "horizontal_spacing": "default",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width_type": "weighted",
-                    "weight": 1,
-                    "vertical_align": "top",
-                    "elements": [{"tag": "markdown", "content": "\n".join(rank_col)}],
+            elements.append({
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": (
+                        f"**{idx + 1}. {name}** {code}\n"
+                        f"近1年: {r1y_display}  |  申购: {status_display}  |  限额: {limit_display}"
+                    ),
                 },
-                {
-                    "tag": "column",
-                    "width_type": "weighted",
-                    "weight": 5,
-                    "vertical_align": "top",
-                    "elements": [{"tag": "markdown", "content": "\n".join(name_col)}],
-                },
-                {
-                    "tag": "column",
-                    "width_type": "weighted",
-                    "weight": 2,
-                    "vertical_align": "top",
-                    "elements": [{"tag": "markdown", "content": "\n".join(return_col)}],
-                },
-                {
-                    "tag": "column",
-                    "width_type": "weighted",
-                    "weight": 2,
-                    "vertical_align": "top",
-                    "elements": [{"tag": "markdown", "content": "\n".join(status_col)}],
-                },
-                {
-                    "tag": "column",
-                    "width_type": "weighted",
-                    "weight": 2,
-                    "vertical_align": "top",
-                    "elements": [{"tag": "markdown", "content": "\n".join(limit_col)}],
-                },
-            ],
-        })
+            })
 
         if data._warnings:
+            elements.append({"tag": "hr"})
             elements.append({
                 "tag": "div",
                 "text": {
