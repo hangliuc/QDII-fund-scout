@@ -53,6 +53,9 @@ class FundInfo:
     data_unavailable: bool = False
     _cross_validation: list[dict] = field(default_factory=list)
     _cross_resolved: list[dict] = field(default_factory=list)
+    _cross_validated: list[dict] = field(default_factory=list)
+    _nav_return_1y: float | None = None
+    market_top3: str = ""
     _purchase_info: str = ""
 
     def to_dict(self) -> dict[str, Any]:

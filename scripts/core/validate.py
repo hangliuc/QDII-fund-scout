@@ -6,6 +6,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+def _safe_print(s: str) -> str:
+    try:
+        s.encode("utf-8")
+        return s
+    except UnicodeEncodeError:
+        return "".join(c if not (0xD800 <= ord(c) <= 0xDFFF) else "\ufffd" for c in s)
+
+
 class ValidationError(Exception):
     pass
 
@@ -302,11 +310,11 @@ def print_report(result: ValidationResult) -> None:
     if result.fatal:
         print("\n❌ Fatal:")
         for f in result.fatal:
-            print(f"  - {f}")
+            print(f"  - {_safe_print(f)}")
     if result.warnings:
         print(f"\n⚠ Warnings ({result.warning_count}):")
         for w in result.warnings[:30]:
-            print(f"  - {w}")
+            print(f"  - {_safe_print(w)}")
         if len(result.warnings) > 30:
             print(f"  ... 还有 {len(result.warnings) - 30} 条")
     if not result.fatal and not result.warnings:

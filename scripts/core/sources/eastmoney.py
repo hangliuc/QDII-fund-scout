@@ -5,6 +5,7 @@ import logging
 import random
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional
 
@@ -75,8 +76,33 @@ class EastMoneySource(BaseSource):
 
     def fetch_detail(self, code: str) -> FundInfo:
         info = FundInfo(code=code, data_source="eastmoney")
+        today = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now().replace(year=datetime.now().year - 1)).strftime("%Y-%m-%d")
 
-        main_html = self._get_with_retry(_FUND_URL.format(code=code))
+        # 13 页 = 260 条，覆盖 1 年交易日（~250），一次性并行拉取
+        urls = [
+            _FUND_URL.format(code=code),
+            _ARCHIVE_URL.format(code=code),
+            _MANAGER_URL.format(code=code),
+        ] + [
+            _NAV_URL.format(code=code, page=p, start=start, end=today)
+            for p in range(1, 14)
+        ]
+
+        results: list[tuple[str, str | None]] = []
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            fut = {ex.submit(self._get_with_retry, u): u for u in urls}
+            for f in as_completed(fut):
+                url = fut[f]
+                try:
+                    results.append((url, f.result()))
+                except Exception:
+                    results.append((url, None))
+
+        html_pool = dict(results)
+
+        # 解析（全部走内存，无 IO）
+        main_html = html_pool.get(urls[0])
         if main_html:
             try:
                 parsed = self._parse_main_page(main_html, code)
@@ -84,11 +110,8 @@ class EastMoneySource(BaseSource):
                     setattr(info, k, v)
             except Exception as e:
                 logger.warning("eastmoney _parse_main_page(%s) 部分解析失败: %s", code, e)
-        else:
-            logger.warning("eastmoney 基金 %s 主页获取失败", code)
-        self._sleep(0.3, 0.5)
 
-        archive_html = self._get_with_retry(_ARCHIVE_URL.format(code=code))
+        archive_html = html_pool.get(urls[1])
         if archive_html:
             try:
                 parsed = self._parse_archive_page(archive_html, code)
@@ -96,9 +119,8 @@ class EastMoneySource(BaseSource):
                     setattr(info, k, v)
             except Exception as e:
                 logger.warning("eastmoney _parse_archive_page(%s) 部分解析失败: %s", code, e)
-        self._sleep(0.3, 0.5)
 
-        manager_html = self._get_with_retry(_MANAGER_URL.format(code=code))
+        manager_html = html_pool.get(urls[2])
         if manager_html:
             try:
                 parsed = self._parse_manager_page(manager_html, code)
@@ -106,32 +128,76 @@ class EastMoneySource(BaseSource):
                     setattr(info, k, v)
             except Exception as e:
                 logger.warning("eastmoney _parse_manager_page(%s) 部分解析失败: %s", code, e)
-        self._sleep(0.3, 0.5)
 
-        try:
-            nav_result = self._fetch_nav_and_drawdown(code)
-            if nav_result:
-                info.nav_list = nav_result["nav_list"]
-                info.drawdown_1y = nav_result["drawdown_1y"]
-                info.drawdown_3y = nav_result["drawdown_3y"]
-        except Exception as e:
-            logger.warning("eastmoney _fetch_nav_and_drawdown(%s) 失败: %s", code, e)
+        all_navs: list[tuple[str, float]] = []
+        all_changes: list[tuple[str, float]] = []
+        for nav_url in urls[3:]:
+            nav_html = html_pool.get(nav_url)
+            if not nav_html:
+                continue
+            try:
+                clean = nav_html.strip()
+                if clean.startswith("jQuery(") and clean.endswith(")"):
+                    clean = clean[7:-1]
+                data = json.loads(clean)
+                items = (data.get("Data", {}) or {}).get("LSJZList", [])
+                for item in items:
+                    try:
+                        nav_val = float(item.get("DWJZ", "0"))
+                        date_val = item.get("FSRQ", "")
+                        if nav_val > 0 and date_val:
+                            all_navs.append((date_val, nav_val))
+                        jz_str = item.get("JZZZL", "")
+                        if jz_str and jz_str not in ("", "None"):
+                            all_changes.append((date_val, float(jz_str)))
+                    except (ValueError, TypeError):
+                        continue
+            except Exception:
+                pass
+
+        if all_navs:
+            all_navs.sort(key=lambda x: x[0])
+            info.nav_list = [{"date": d, "nav": n} for d, n in all_navs]
+            info.drawdown_1y = self._calc_drawdown(all_navs, start)
+            # 从 NAV 数据独立计算近1年收益率，用于交叉验证
+            info._nav_return_1y = self._calc_return_from_nav(all_navs, start)
 
         info.update_date = time.strftime("%Y-%m-%d")
         return info
 
+    def fetch_purchase_limit(self, code: str) -> str:
+        """从费率页面获取单日限额作为第三验证源"""
+        url = _ARCHIVE_URL.format(code=code)
+        html = self._get_with_retry(url, retries=1, timeout=10)
+        if not html:
+            return ""
+
+        m = re.search(r'单日累计购买上限(?:[：(]*)([\d.,]+)\s*(万?)\s*元', html)
+        if m:
+            amt = m.group(1).replace(",", "")
+            unit = m.group(2)
+            return f"{amt}{unit}元" if unit else f"{amt}元"
+        return ""
+
     def fetch_batch(self, codes: list[str]) -> list[FundInfo]:
-        results: list[FundInfo] = []
-        for code in codes:
+        if not codes:
+            return []
+        if len(codes) == 1:
             try:
-                info = self.fetch_detail(code)
-                results.append(info)
-            except SourceError as e:
-                logger.warning("eastmoney fetch_detail(%s) 失败: %s", code, e)
-            except Exception as e:
-                logger.warning("eastmoney fetch_detail(%s) 异常: %s", code, e)
-            self._sleep(0.3, 0.5)
-        return results
+                return [self.fetch_detail(codes[0])]
+            except (SourceError, Exception) as e:
+                logger.warning("eastmoney fetch_detail(%s) 失败: %s", codes[0], e)
+                return []
+        results: list[FundInfo | None] = [None] * len(codes)
+        with ThreadPoolExecutor(max_workers=min(len(codes), 3)) as ex:
+            fut_to_idx = {ex.submit(self.fetch_detail, code): i for i, code in enumerate(codes)}
+            for fut in as_completed(fut_to_idx):
+                idx = fut_to_idx[fut]
+                try:
+                    results[idx] = fut.result()
+                except (SourceError, Exception) as e:
+                    logger.warning("eastmoney fetch_detail(%s) 失败: %s", codes[idx], e)
+        return [r for r in results if r is not None]
 
     def _parse_main_page(self, html: str, code: str) -> dict:
         info: dict = {}
@@ -323,66 +389,6 @@ class EastMoneySource(BaseSource):
 
         return result
 
-    def _fetch_nav_and_drawdown(self, code: str) -> Optional[dict]:
-        today = datetime.now().strftime("%Y-%m-%d")
-        start_1y = (datetime.now().replace(year=datetime.now().year - 1)).strftime("%Y-%m-%d")
-        start_3y = (datetime.now().replace(year=datetime.now().year - 3)).strftime("%Y-%m-%d")
-
-        all_navs: list[tuple[str, float]] = []
-        page = 1
-        while True:
-            url = _NAV_URL.format(code=code, page=page, start=start_3y, end=today)
-            try:
-                text = self._get(url)
-            except SourceError as e:
-                logger.warning("eastmoney NAV 请求失败 %s page=%d: %s", code, page, e)
-                break
-            m = re.search(r'"Data":\s*(\{.*?\})\s*\}', text, re.DOTALL)
-            if not m:
-                break
-            try:
-                data = json.loads("{" + m.group(0) if not m.group(0).startswith("{") else m.group(0))
-            except json.JSONDecodeError:
-                data_match = re.search(r'"LSJZList"\s*:\s*(\[.*?\])', text, re.DOTALL)
-                total_match = re.search(r'"TotalCount"\s*:\s*(\d+)', text)
-                if not data_match:
-                    break
-                items = json.loads(data_match.group(1))
-                total = int(total_match.group(1)) if total_match else 0
-            else:
-                items = data.get("Data", {}).get("LSJZList", [])
-                total = data.get("Data", {}).get("TotalCount", 0)
-
-            if not items:
-                break
-            for item in items:
-                try:
-                    nav_val = float(item.get("DWJZ", "0"))
-                    date_val = item.get("FSRQ", "")
-                    if nav_val > 0 and date_val:
-                        all_navs.append((date_val, nav_val))
-                except (ValueError, TypeError):
-                    continue
-
-            if page * 20 >= total:
-                break
-            page += 1
-            self._sleep(0.3, 0.8)
-
-        if not all_navs:
-            return None
-
-        all_navs.sort(key=lambda x: x[0])
-
-        drawdown_1y = self._calc_drawdown(all_navs, start_1y)
-        drawdown_3y = self._calc_drawdown(all_navs, start_3y)
-
-        return {
-            "nav_list": [{"date": d, "nav": n} for d, n in all_navs],
-            "drawdown_1y": drawdown_1y,
-            "drawdown_3y": drawdown_3y,
-        }
-
     @staticmethod
     def _calc_drawdown(nav_list: list[tuple[str, float]], since: str) -> Optional[float]:
         filtered = [(d, n) for d, n in nav_list if d >= since]
@@ -397,6 +403,17 @@ class EastMoneySource(BaseSource):
             if dd > max_dd:
                 max_dd = dd
         return round(max_dd, 6)
+
+    @staticmethod
+    def _calc_return_from_nav(nav_list: list[tuple[str, float]], since: str) -> Optional[float]:
+        filtered = [(d, n) for d, n in nav_list if d >= since]
+        if len(filtered) < 2:
+            return None
+        start_nav = filtered[0][1]
+        end_nav = filtered[-1][1]
+        if start_nav <= 0:
+            return None
+        return round((end_nav - start_nav) / start_nav * 100, 4)
 
     def _fetch_holdings(self, code: str, year: int) -> list[dict]:
         text = self._get_with_retry(_HOLDING_URL.format(code=code, year=year))

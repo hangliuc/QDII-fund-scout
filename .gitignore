@@ -24,6 +24,16 @@ scripts/compare_*.md
 scripts/search_*.json
 scripts/search_*.md
 
+# User config (contains webhook secrets)
+.fund-scout/
+config.json
+
+# macOS launchd plist (per-machine)
+com.fundscout.push.plist
+
+# Scheduled push script (per-machine)
+scheduled_push.sh
+
 # Environment
 .env
 .env.*

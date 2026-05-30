@@ -115,13 +115,61 @@ class CSRCSource:
                 return item
         return records[0]
 
+    @staticmethod
+    def _simplify_name(name: str) -> list[str]:
+        if not name:
+            return []
+        variations: list[str] = []
+        _CURRENCY_RE = re.compile(r'(人民币|美元|港元|美元现汇|美元现钞)')
+        _TYPE_RE = re.compile(r'(混合|股票|债券|灵活配置|指数)')
+        _SUFFIX_RE = re.compile(r'[ACDE]$')
+        _QDII_TAG_RE = re.compile(r'\(QDII-LOF\)|\(QDII\)')
+
+        base = _SUFFIX_RE.sub('', name).strip()
+        if base and base != name:
+            variations.append(base)
+
+        no_currency = _CURRENCY_RE.sub('', base).strip()
+        if no_currency and no_currency != name and no_currency not in variations:
+            variations.append(no_currency)
+
+        no_type = _TYPE_RE.sub('', no_currency).strip()
+        no_type = re.sub(r'\s+', '', no_type)
+        if no_type and no_type != name and no_type not in variations:
+            variations.append(no_type)
+
+        no_qdii_tag = _QDII_TAG_RE.sub('', no_type).strip()
+        no_qdii_tag = re.sub(r'\s+', '', no_qdii_tag)
+        if no_qdii_tag and no_qdii_tag != name and no_qdii_tag not in variations:
+            variations.append(no_qdii_tag)
+
+        no_qdii_from_base = _QDII_TAG_RE.sub('', base).strip()
+        no_qdii_from_base = re.sub(r'\s+', '', no_qdii_from_base)
+        if no_qdii_from_base and no_qdii_from_base != name and no_qdii_from_base not in variations:
+            variations.append(no_qdii_from_base)
+
+        bare = _SUFFIX_RE.sub('', name)
+        bare = _CURRENCY_RE.sub('', bare)
+        bare = _TYPE_RE.sub('', bare)
+        bare = _QDII_TAG_RE.sub('', bare)
+        bare = re.sub(r'\s+', '', bare).strip()
+        if bare and bare != name and bare not in variations:
+            variations.append(bare)
+
+        return variations
+
     def search_report(self, main_code: str, short_name: str = "") -> dict | None:
         rec = self._csrc_search(fund_code=main_code)
         if rec:
             return rec
         if short_name:
-            time.sleep(random.uniform(0.5, 1.0))
+            time.sleep(random.uniform(0.3, 0.6))
             rec = self._csrc_search(fund_short_name=short_name)
+            if rec:
+                return rec
+        for name in self._simplify_name(short_name):
+            time.sleep(random.uniform(0.3, 0.6))
+            rec = self._csrc_search(fund_short_name=name)
             if rec:
                 return rec
         return None
@@ -149,6 +197,16 @@ class CSRCSource:
                     text = page.extract_text() or ""
                     if "国家" not in text:
                         continue
+                    if "未持有股票" in text or "未持有" in text:
+                        for raw_line in text.split("\n"):
+                            line = raw_line.strip()
+                            if "国家" in line and ("地区" in line or "证券市场" in line):
+                                next_lines = text.split("\n")
+                                idx = next_lines.index(raw_line) if raw_line in next_lines else -1
+                                if idx >= 0 and idx + 1 < len(next_lines):
+                                    next_line = next_lines[idx + 1].strip()
+                                    if "未持有" in next_line:
+                                        return {"_no_holdings": True}
                     if "公允" not in text and "比例" not in text:
                         continue
 
@@ -226,9 +284,12 @@ class CSRCSource:
         dist = self._parse_pdf_market_dist(pdf_bytes)
         total = round(sum(dist.values()), 2) if dist else 0
 
-        time.sleep(random.uniform(self.rate_limit, self.rate_limit + 0.5))
+        time.sleep(random.uniform(0.1, 0.3))
 
-        if dist:
+        if dist.get("_no_holdings"):
+            return {"_source": self._source_tag(), "_total_pct": 0, "_inferred": True, "_note": "no_holdings", "_instance_id": instance_id}
+        non_meta = {k: v for k, v in dist.items() if not k.startswith("_")}
+        if non_meta:
             return {**dist, "_source": self._source_tag(), "_total_pct": total, "_inferred": False}
         return {"_source": self._source_tag(), "_total_pct": 0, "_inferred": True, "_note": "no_table", "_instance_id": instance_id}
 
@@ -245,7 +306,7 @@ class CSRCSource:
         dist = self._parse_pdf_industry_dist(pdf_bytes)
         total = round(sum(dist.values()), 2) if dist else 0
 
-        time.sleep(random.uniform(self.rate_limit, self.rate_limit + 0.5))
+        time.sleep(random.uniform(0.1, 0.3))
 
         if dist:
             return {**dist, "_source": self._source_tag(), "_total_pct": total, "_inferred": False}

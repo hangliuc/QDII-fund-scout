@@ -5,15 +5,22 @@ import argparse
 import csv
 import io
 import json
+import logging
 import os
 import re
 import sys
 import time
+import warnings
+
+# 压制内部库的杂音告警，用户只看我们显式 print 的内容
+warnings.filterwarnings("ignore", message=".*OpenSSL.*")
+logging.basicConfig(level=logging.ERROR, format="%(message)s")
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.models import FundInfo, FundDataResult
+from core.fetcher import FundFetcher as CoreFetcher
 from core.sources.eastmoney import EastMoneySource
 from core.sources.howbuy import HowbuySource
 from core.sources.csrc import CSRCSource
@@ -73,6 +80,7 @@ class FundFetcher:
         info._purchase_info = _build_purchase_info(
             info.purchase_status, info.purchase_limit, info.effectively_closed
         )
+        info.market_top3 = CoreFetcher._compute_market_top3(None, info)
 
         if holdings:
             year = time.localtime().tm_year
@@ -98,6 +106,21 @@ class FundFetcher:
                 info._purchase_info = _build_purchase_info(
                     info.purchase_status, info.purchase_limit, info.effectively_closed
                 )
+                info.market_top3 = CoreFetcher._compute_market_top3(None, info)
+        # 并行获取 CSRC 季报数据（仅主动基金需要）
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        csrc_funds = [f for f in results if not f.data_unavailable and not f.market_top3]
+        if csrc_funds:
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                fut_map = {ex.submit(self.csrc.fetch_market_distribution, f.code, f.short_name or f.name): f for f in csrc_funds}
+                for fut in as_completed(fut_map):
+                    f = fut_map[fut]
+                    try:
+                        dist = fut.result()
+                        f.market_distribution = dist
+                        f.market_top3 = CoreFetcher._compute_market_top3(dist, f)
+                    except Exception:
+                        pass
         return results
 
     def search(self, keyword: str, fund_type: str = "") -> list[dict]:
@@ -165,21 +188,117 @@ def _format_md(data: dict, style: str = "table") -> str:
 
 
 TABLE_COLS = [
-    ("name", "名称", 18),
-    ("code", "代码", 8),
-    ("return_1y", "近1年", 8),
-    ("drawdown_1y", "回撤", 8),
-    ("scale", "规模(亿)", 9),
-    ("total_fee", "总费率", 8),
-    ("purchase_info", "申购状态", 16),
+    ("name", "名称", 20, 26),
+    ("code", "代码", 6, 8),
+    ("return_1y", "近1年", 8, 10),
+    ("drawdown_1y", "近一年回撤", 12, 14),
+    ("scale", "规模", 10, 12),
+    ("total_fee", "费率%", 7, 8),
+    ("purchase_info", "申购状态", 18, 20),
+    ("market_top3", "市场投资TOP3", 30, 40),
 ]
 
 
-def _fmt_table_val(f: dict, key: str) -> str:
+_RET_FIELDS = {"return_1y", "return_1m", "return_3m", "return_6m", "return_3y"}
+
+
+def _fmt_pct(v) -> str:
+    try:
+        n = float(v)
+        if n > 0:
+            return f"+{n:.2f}%"
+        return f"{n:.2f}%"
+    except (ValueError, TypeError):
+        return str(v) if v else "-"
+
+
+def _dw(s: str) -> int:
+    w = 0
+    for ch in s:
+        cp = ord(ch)
+        if 0x4E00 <= cp <= 0x9FFF or 0x3000 <= cp <= 0x303F or 0xFF00 <= cp <= 0xFFEF:
+            w += 2
+        else:
+            w += 1
+    return w
+
+
+def _crop(s: str, limit: int) -> str:
+    if _dw(s) <= limit:
+        return s
+    out = []
+    w = 0
+    for ch in s:
+        cw = 2 if (0x4E00 <= ord(ch) <= 0x9FFF) else 1
+        if w + cw > limit - 2:
+            break
+        out.append(ch)
+        w += cw
+    return "".join(out) + ".."
+
+
+def _pad(s: str, width: int, align: str = "l") -> str:
+    pad = width - _dw(s)
+    if pad <= 0:
+        return _crop(s, width)
+    if align == "r":
+        return " " * pad + s
+    if align == "c":
+        l = pad // 2
+        r = pad - l
+        return " " * l + s + " " * r
+    return s + " " * pad
+
+
+def _sep_line(cols: list[int], left: str, sep: str, right: str, fill: str = "─") -> str:
+    return left + sep.join(fill * w for w in cols) + right
+
+
+def _format_rich_table(funds: list[dict]) -> str:
+    cols = []
+    for key, label, min_w, max_w in TABLE_COLS:
+        vals = [_fmt_val(f, key) for f in funds] + [label]
+        data_w = max(_dw(v) for v in vals)
+        cols.append(min(max(data_w + 2, min_w), max_w))
+
+    top_s = _sep_line(cols, "┌", "┬", "┐")
+    sep_s = _sep_line(cols, "├", "┼", "┤")
+    bot_s = _sep_line(cols, "└", "┴", "┘")
+
+    hdr = "│" + "│".join(" " + _pad(label, cols[i] - 2) + " " for i, (_, label, _, _) in enumerate(TABLE_COLS)) + "│"
+
+    rows = [top_s, hdr, sep_s]
+    for idx, f in enumerate(funds):
+        cells = []
+        for i, (key, _, _, _) in enumerate(TABLE_COLS):
+            w = cols[i] - 2
+            v = _fmt_val(f, key)
+            if key == "name":
+                v = _crop(v, w)
+                cells.append(" " + _pad(v, w) + " ")
+            else:
+                v = _crop(v, w)
+                cells.append(" " + _pad(v, w, "r") + " ")
+        rows.append("│" + "│".join(cells) + "│")
+        if idx < len(funds) - 1:
+            rows.append(sep_s)
+    rows.append(bot_s)
+    return "\n".join(rows)
+
+
+def _fmt_val(f: dict, key: str) -> str:
+    if key in _RET_FIELDS:
+        return _fmt_pct(f.get(key))
+    if key in ("drawdown_1y", "drawdown_3y"):
+        v = f.get(key)
+        if v is None:
+            return "-"
+        try:
+            return f"{float(v)*100:.2f}%"
+        except (ValueError, TypeError):
+            return str(v)
     if key == "purchase_info":
-        v = f.get("purchase_info", "")
-        if not v:
-            v = f.get("purchase_status", "-")
+        v = f.get("purchase_info", "") or f.get("purchase_status", "-")
     else:
         v = f.get(key, "")
     if isinstance(v, (dict, list)):
@@ -187,52 +306,6 @@ def _fmt_table_val(f: dict, key: str) -> str:
     if v is None or v == "None":
         v = "-"
     return str(v)
-
-
-def _render_sep(col_widths: list[int], left: str, mid: str, right: str, fill: str) -> str:
-    parts = [fill * w for w in col_widths]
-    return left + mid.join(parts) + right
-
-
-def _format_rich_table(funds: list[dict]) -> str:
-    col_widths = []
-    for key, label, min_w in TABLE_COLS:
-        vals = [_fmt_table_val(f, key) for f in funds]
-        max_data = max(len(v) for v in vals) if vals else 0
-        col_widths.append(max(max_data + 2, len(label) + 2, min_w))
-
-    top = _render_sep(col_widths, "┌", "┬", "┐", "─")
-    sep = _render_sep(col_widths, "├", "┼", "┤", "─")
-    bot = _render_sep(col_widths, "└", "┴", "┘", "─")
-
-    # header
-    hdr_cells = []
-    for i, (_, label, _) in enumerate(TABLE_COLS):
-        w = col_widths[i]
-        if i == 0:
-            hdr_cells.append(" " + label + " " * (w - len(label) - 1))
-        else:
-            hdr_cells.append(" " * (w - len(label) - 1) + label + " ")
-    hdr = "│" + "│".join(hdr_cells) + "│"
-
-    # data rows (right-aligned for all except name)
-    lines = [top, hdr, sep]
-    for f in funds:
-        cells = []
-        for i, (key, _, _) in enumerate(TABLE_COLS):
-            v = _fmt_table_val(f, key)
-            w = col_widths[i]
-            if key == "name":
-                if len(v) > w - 2:
-                    v = v[:w - 4] + ".."
-                padded = " " + v + " " * (w - len(v) - 1)
-            else:
-                padded = " " * (w - len(v) - 1) + v + " "
-            cells.append(padded)
-        lines.append("│" + "│".join(cells) + "│")
-
-    lines.append(bot)
-    return "\n".join(lines)
 
 
 def _format_output(data: dict, fmt: str, style: str = "table") -> str:
@@ -315,15 +388,10 @@ def cmd_compare(args: argparse.Namespace) -> None:
     data["_warnings"] = validation.warnings
     print_report(validation)
 
-    fmt = config.get("defaults", {}).get("format", args.format)
-    style = config.get("defaults", {}).get("style", args.style)
+    fmt = args.format
+    style = args.style
     content = _format_output(data, fmt, style=style)
     print(content)
-
-    ext = {"json": "json", "csv": "csv", "md": "md"}[fmt]
-    filename = f"compare_{'_'.join(codes)}.{ext}"
-    path = _write_output(content, args.output, filename)
-    print(f"\n已保存: {path}")
 
     push_targets = []
     if args.push:

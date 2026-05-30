@@ -84,9 +84,9 @@ show_menu() {
     echo ""
     echo "  请选择操作："
     echo ""
-    echo "    1) 查看我的基金（使用配置文件）"
-    echo "    2) 编辑我的基金列表"
-    echo "    3) 打开可视化界面（浏览器配置）"
+    echo "    1) 打开可视化界面（浏览器配置）"
+    echo "    2) 查看我的基金（使用配置文件）"
+    echo "    3) 编辑我的基金列表"
     echo "    4) 手动输入基金代码查询"
     echo "    5) 查询我的基金并推送到飞书"
     echo "    6) 查询我的基金并推送到企业微信"
@@ -145,13 +145,7 @@ edit_funds() {
     echo "  示例：012870 易方达纳指100C"
     echo "  输入完毕后输入空行结束"
     echo ""
-    echo "  (国内常见 QDII 基金代码参考)"
-    echo "  012870 易方达纳指100C     006479 广发纳指100C"
-    echo "  008971 大成纳指100C       012044 华安纳指100C"
-    echo "  000834 国富纳指100C       006075 博时标普500C"
-    echo "  012922 易方达全球成长精选  021842 国富全球科技"
-    echo "  539002 建信新兴市场混合    008631 招商中证白酒C"
-    echo "  050025 博时黄金C"
+    echo "  提示：标准基金列表可参考 README.md 或打开可视化界面查看"
     echo ""
 
     FUNDS_LIST=""
@@ -379,8 +373,9 @@ setup_schedule() {
     echo "    2) 工作日 15:30（收盘后）"
     echo "    3) 工作日 09:00 + 15:30（两次）"
     echo "    4) 每天 09:00"
+    echo "    5) 自定义时间"
     echo ""
-    read -p "  请选择 (1-4): " TIME_SLOT
+    read -p "  请选择 (1-5): " TIME_SLOT
     echo ""
 
     local CRON_EXPR=""
@@ -390,12 +385,49 @@ setup_schedule() {
         2) CRON_EXPR="30 15 * * 1-5"; LABEL="工作日 15:30" ;;
         3) CRON_EXPR="0 9,15 * * 1-5"; LABEL="工作日 09:00 + 15:30" ;;
         4) CRON_EXPR="0 9 * * *"; LABEL="每天 09:00" ;;
+        5)
+            echo "  格式：24小时制，如 08:30 或 16:00"
+            echo "  多个时间用逗号分隔，如 08:30,16:00"
+            read -p "  请输入推送时间: " CUSTOM_TIME
+            if [ -z "$CUSTOM_TIME" ]; then
+                warn "未输入时间"; sleep 1; return
+            fi
+            local MINUTES=""
+            local HOURS=""
+            local IFS_OLD="$IFS"
+            IFS=','; for T in $CUSTOM_TIME; do
+                T=$(echo "$T" | tr -d ' ')
+                local H=$(echo "$T" | cut -d: -f1)
+                local M=$(echo "$T" | cut -d: -f2)
+                if [ -z "$M" ]; then M="0"; fi
+                if [ -z "$MINUTES" ]; then
+                    MINUTES="$M"
+                    HOURS="$H"
+                else
+                    MINUTES="$MINUTES,$M"
+                    HOURS="$HOURS,$H"
+                fi
+            done
+            IFS="$IFS_OLD"
+            echo ""
+            echo "  适用日期："
+            echo "    1) 每天运行"
+            echo "    2) 仅工作日（周一至周五）"
+            read -p "  请选择 (1-2): " DAY_OPT
+            local DOW="*"
+            case "$DAY_OPT" in
+                2) DOW="1-5"; LABEL="工作日" ;;
+                *) DOW="*"; LABEL="每天" ;;
+            esac
+            CRON_EXPR="${MINUTES} ${HOURS} * * ${DOW}"
+            LABEL="${LABEL} ${CUSTOM_TIME}"
+            ;;
         *) warn "无效选择"; sleep 1; return ;;
     esac
 
     # 创建定时任务包装脚本
-    mkdir -p "$CONFIG_DIR"
-    SCHEDULE_SCRIPT="$CONFIG_DIR/scheduled_push.sh"
+    mkdir -p "$HOME/.fund-scout"
+    SCHEDULE_SCRIPT="$HOME/.fund-scout/scheduled_push.sh"
     cat > "$SCHEDULE_SCRIPT" <<'SHSCRIPT'
 #!/bin/bash
 # QDII-fund-scout 定时推送脚本（由 run.sh 自动生成）
@@ -545,7 +577,7 @@ remove_schedule() {
         warn "请在 Windows 任务计划程序中手动删除 QDIIFundScoutPush 任务"
     fi
 
-    rm -f "$CONFIG_DIR/scheduled_push.sh"
+    rm -f "$HOME/.fund-scout/scheduled_push.sh"
     echo ""
     read -p "按回车键返回主菜单..."
 }
@@ -558,11 +590,11 @@ main() {
         show_menu
 
         case "$CHOICE" in
-            1)
+            2)
                 if [ -f "$CONFIG_FILE" ]; then
                     run_compare "" ""
                 else
-                    warn "尚未配置基金列表，请先选择 2) 编辑我的基金列表"
+                    warn "尚未配置基金列表，请先选择 3) 编辑我的基金列表"
                     sleep 2
                 fi
                 ;;
@@ -626,13 +658,13 @@ main() {
                     fi
                 fi
                 ;;
-            2)
+            3)
                 edit_funds
                 ;;
             8)
                 edit_push
                 ;;
-            3)
+            1)
                 start_ui
                 ;;
             9)

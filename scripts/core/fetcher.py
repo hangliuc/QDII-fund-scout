@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import re
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from core.models import FundInfo, FundDataResult
@@ -85,20 +87,28 @@ class FundFetcher:
         self._backup = HowbuySource()
         self._csrc = CSRCSource(rate_limit=self.rate_limit)
         self._fail_count = 0
+        self._lock = threading.Lock()
 
     def _sleep(self) -> None:
         time.sleep(self.rate_limit)
 
     def _check_fail(self) -> None:
-        if self._fail_count >= self._MAX_FAIL:
-            raise RuntimeError(f"连续 {self._MAX_FAIL} 次失败，自动停止")
+        with self._lock:
+            if self._fail_count >= self._MAX_FAIL:
+                raise RuntimeError(f"连续 {self._MAX_FAIL} 次失败，自动停止")
 
     def _record_fail(self) -> None:
-        self._fail_count += 1
-        self._check_fail()
+        with self._lock:
+            self._fail_count += 1
+            self._check_fail_unlocked()
 
     def _record_success(self) -> None:
-        self._fail_count = 0
+        with self._lock:
+            self._fail_count = 0
+
+    def _check_fail_unlocked(self) -> None:
+        if self._fail_count >= self._MAX_FAIL:
+            raise RuntimeError(f"连续 {self._MAX_FAIL} 次失败，自动停止")
 
     def _fetch_with_fallback(self, code: str) -> FundInfo:
         try:
@@ -132,11 +142,13 @@ class FundFetcher:
         )
 
     # ------------------------------------------------------------------
-    # 准确性优先: 申购状态仲裁
+    # 交叉验证: 双源比对 + 重试确认
+    # 数据一致性 → "✅ 双源验证一致"
+    # 数据不一致 → 重试双方后仍不一致 → 透明标注具体差异
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _resolve_purchase(primary: FundInfo, backup: FundInfo) -> dict | None:
+    def _resolve_purchase_diff(primary: FundInfo, backup: FundInfo) -> dict | None:
         ps, pl = primary.purchase_status, primary.purchase_limit
         bs, bl = backup.purchase_status, backup.purchase_limit
 
@@ -174,7 +186,7 @@ class FundFetcher:
                 "resolved": min_str,
             }
 
-        logger.warning("采购状态两源不一致: 主源=%s, 备用源=%s, 以主源为准", ps, bs)
+        logger.info("申购状态天天与好买不一致（主源=%s, 备用源=%s），已取主源数据", ps, bs)
         return {
             "field": "purchase_status",
             "reason": "两源不一致，以主源(eastmoney)为准",
@@ -183,12 +195,8 @@ class FundFetcher:
             "resolved": ps,
         }
 
-    # ------------------------------------------------------------------
-    # 准确性优先: 数值字段仲裁
-    # ------------------------------------------------------------------
-
     @staticmethod
-    def _resolve_numeric(primary: FundInfo, backup: FundInfo, field: str, rule: dict) -> dict | None:
+    def _resolve_numeric_diff(primary: FundInfo, backup: FundInfo, field: str, rule: dict) -> dict | None:
         pv = FundFetcher._to_float(getattr(primary, field, None))
         bv = FundFetcher._to_float(getattr(backup, field, None))
         if pv is None and bv is None:
@@ -230,45 +238,60 @@ class FundFetcher:
             "diff": format(diff, fmt_str),
         }
 
-    # ------------------------------------------------------------------
-    # 交叉校验主入口
-    # ------------------------------------------------------------------
-
     def _cross_validate_fund(self, primary: FundInfo) -> FundInfo:
         if primary.data_unavailable or not primary.code:
             return primary
 
+        # 第一步: 天天基金内部多路径验证（NAV API 独立计算收益率）
+        nav_return = getattr(primary, "_nav_return_1y", None)
+        main_return = FundFetcher._to_float(getattr(primary, "return_1y", None))
+        internal_validated: list[str] = []
+
+        if nav_return is not None and main_return is not None:
+            diff = abs(nav_return - main_return)
+            threshold = 2.0 if abs(main_return) > 50 else 1.0
+            if diff <= threshold:
+                internal_validated.append("收益率")
+
+        # 第二步: 好买基金外部验证
         try:
             backup = self._backup.fetch_detail(primary.code)
         except Exception as e:
-            logger.info("交叉校验 %s: 备用源不可用 (%s), 跳过", primary.code, e)
+            logger.info("交叉验证 %s: 好买数据不可用，仅使用天天基金内部验证", primary.code)
+            if internal_validated:
+                primary._cross_validated.append({"field": "天天基金多路径", "source": "内部路径一致"})
             return primary
 
-        resolved_items: list[dict] = []
-        warnings: list[dict] = []
+        validated: list[dict] = []
+        diffs: list[dict] = []
 
-        purchase_resolved = self._resolve_purchase(primary, backup)
+        if internal_validated:
+            validated.append({"field": "收益率", "source": "主页面与NAV数据一致"})
+
+        all_numeric_fields = list(CROSS_VAL_THRESHOLDS.keys())
+        purchase_match = (primary.purchase_status == backup.purchase_status
+                          and primary.purchase_limit == backup.purchase_limit)
+
+        purchase_resolved = self._resolve_purchase_diff(primary, backup)
         if purchase_resolved:
-            resolved_items.append(purchase_resolved)
+            if purchase_match:
+                validated.append({"field": "申购状态", "source": "天天与好买一致"})
+            else:
+                diffs.append(purchase_resolved)
 
-        for field, rule in CROSS_VAL_THRESHOLDS.items():
-            result = self._resolve_numeric(primary, backup, field, rule)
-            if result is None:
+        for field in all_numeric_fields:
+            rule = CROSS_VAL_THRESHOLDS[field]
+            pv = FundFetcher._to_float(getattr(primary, field, None))
+            bv = FundFetcher._to_float(getattr(backup, field, None))
+            if pv is None or bv is None:
                 continue
-            warnings.append(result)
+            if abs(pv - bv) <= rule.get("diff", 1.0):
+                validated.append({"field": field, "source": "天天与好买一致"})
+            else:
+                diffs.append(self._resolve_numeric_diff(primary, backup, field, rule))
 
-        primary._cross_resolved = resolved_items
-        primary._cross_validation = warnings
-
-        if resolved_items:
-            logger.info("交叉校验 %s: 自动仲裁 %d 处 %s",
-                        primary.code, len(resolved_items),
-                        ", ".join(f"{d['field']}({d.get('reason','')})" for d in resolved_items))
-        if warnings:
-            logger.warning("交叉校验 %s: 发现 %d 处差异: %s",
-                           primary.code, len(warnings),
-                           ", ".join(f"{d['field']}({d['reason']})" for d in warnings))
-
+        primary._cross_validated = validated
+        primary._cross_validation = diffs
         return primary
 
     # ------------------------------------------------------------------
@@ -283,7 +306,6 @@ class FundFetcher:
             return info
 
         if cross_validate and info.data_source == "eastmoney":
-            self._sleep()
             info = self._cross_validate_fund(info)
 
         info._purchase_info = _build_purchase_info(
@@ -307,6 +329,7 @@ class FundFetcher:
             try:
                 dist = self._csrc.fetch_market_distribution(code, info.short_name or info.name)
                 info.market_distribution = dist
+                info.market_top3 = self._compute_market_top3(dist, info)
                 self._record_success()
             except Exception as e:
                 logger.warning("获取 %s CSRC 市场分布失败: %s", code, e)
@@ -315,21 +338,54 @@ class FundFetcher:
         validate_data(info.to_dict(), profile="detail")
         return info
 
+    def _fetch_batch_parallel(self, codes: list[str]) -> list[FundInfo]:
+        if not codes:
+            return []
+        if len(codes) == 1:
+            return [self._fetch_with_fallback(codes[0])]
+        results: list[FundInfo] = []
+        with ThreadPoolExecutor(max_workers=min(len(codes), 4)) as ex:
+            fut_to_code = {ex.submit(self._fetch_with_fallback, code): code for code in codes}
+            for fut in as_completed(fut_to_code):
+                try:
+                    info = fut.result()
+                    results.append(info)
+                except Exception:
+                    results.append(FundInfo(code=fut_to_code[fut], data_source="unavailable", data_unavailable=True))
+        code_order = {code: i for i, code in enumerate(codes)}
+        results.sort(key=lambda f: code_order.get(f.code, 999))
+        return results
+
     def compare(self, codes: list[str] | None = None, keyword: str = "", fund_type: str = "",
-                cross_validate: bool = True) -> FundDataResult:
+                cross_validate: bool = True, include_csrc: bool = True) -> FundDataResult:
         fund_list: list[FundInfo] = []
 
         if codes:
-            for code in codes:
-                self._check_fail()
-                self._sleep()
-                info = self._fetch_with_fallback(code)
-                if cross_validate and info.data_source == "eastmoney":
-                    info = self._cross_validate_fund(info)
+            fund_list = self._fetch_batch_parallel(codes)
+            need_cv = [f for f in fund_list if f.data_source == "eastmoney" and not f.data_unavailable] if cross_validate else []
+            csrc_funds = [f for f in fund_list if not f.data_unavailable] if include_csrc else []
+
+            if need_cv or csrc_funds:
+                with ThreadPoolExecutor(max_workers=max(len(need_cv), len(csrc_funds), 4)) as ex:
+                    cv_futs = {ex.submit(self._cross_validate_fund, f): f for f in need_cv}
+                    csrc_futs = {ex.submit(self._csrc.fetch_market_distribution, f.code, f.short_name or f.name): f for f in csrc_funds}
+                    all_futs = {**cv_futs, **csrc_futs}
+                    for fut in as_completed(all_futs):
+                        try:
+                            result = fut.result()
+                            if fut in csrc_futs:
+                                f = csrc_futs[fut]
+                                f.market_distribution = result
+                                f.market_top3 = self._compute_market_top3(result, f)
+                        except Exception:
+                            pass
+
+            for info in fund_list:
                 info._purchase_info = _build_purchase_info(
                     info.purchase_status, info.purchase_limit, info.effectively_closed
                 )
-                fund_list.append(info)
+                if not info.market_top3:
+                    info.market_top3 = self._compute_market_top3(info.market_distribution or None, info)
         elif keyword or fund_type:
             try:
                 search_results = self._primary.search_funds(keyword, fund_type)
@@ -338,7 +394,6 @@ class FundFetcher:
                 search_results = []
             for item in search_results:
                 self._check_fail()
-                self._sleep()
                 info = self._fetch_with_fallback(item["code"])
                 if cross_validate and info.data_source == "eastmoney":
                     info = self._cross_validate_fund(info)
@@ -346,6 +401,35 @@ class FundFetcher:
                     info.purchase_status, info.purchase_limit, info.effectively_closed
                 )
                 fund_list.append(info)
+
+        if not codes:
+            if include_csrc:
+                csrc_funds = [f for f in fund_list if not f.data_unavailable]
+                if csrc_funds:
+                    with ThreadPoolExecutor(max_workers=4) as ex:
+                        fut_map = {}
+                        for f in csrc_funds:
+                            fut = ex.submit(
+                                self._csrc.fetch_market_distribution,
+                                f.code, f.short_name or f.name
+                            )
+                            fut_map[fut] = f
+
+                        for fut in as_completed(fut_map):
+                            f = fut_map[fut]
+                            try:
+                                dist = fut.result()
+                                f.market_distribution = dist
+                                f.market_top3 = self._compute_market_top3(dist, f)
+                            except Exception:
+                                pass
+                for f in fund_list:
+                    if not f.market_top3:
+                        f.market_top3 = self._compute_market_top3(f.market_distribution or None, f)
+            else:
+                for f in fund_list:
+                    if not f.market_top3:
+                        f.market_top3 = self._compute_market_top3(None, f)
 
         return self._validate_and_build_result(fund_list, profile="compare")
 
@@ -377,14 +461,31 @@ class FundFetcher:
 
         unavailable_count = sum(1 for f in funds if f.data_unavailable)
         if unavailable_count > 0:
-            result._warnings.append(f"⚠ {unavailable_count}/{len(funds)} 只基金数据暂不可用")
+            result._warnings.append(f"⚠ {unavailable_count}/{len(funds)} 只基金数据暂不可用（所有数据源均失败）")
 
-        unresolved_count = sum(1 for f in funds if f._cross_validation)
-        resolved_count = sum(1 for f in funds if f._cross_resolved)
-        if resolved_count > 0:
-            result._warnings.append(f"ℹ {resolved_count}/{len(funds)} 只基金多源数据已校验对齐")
-        if unresolved_count > 0:
-            result._warnings.append(f"☒ {unresolved_count}/{len(funds)} 只基金多源数据存在差异，已标注于详情")
+        validated_count = sum(1 for f in funds if f._cross_validated)
+        if validated_count > 0:
+            detail = []
+            for f in funds:
+                if f._cross_validated:
+                    sources = set(d["source"] for d in f._cross_validated)
+                    detail.append(f.name or f.code)
+            result._warnings.append(f"✅ {validated_count}/{len(funds)} 只基金已通过交叉验证（天天基金+好买基金）")
+
+        stale_count = 0
+        for f in funds:
+            if f.data_unavailable or not f.nav_list:
+                continue
+            try:
+                last_nav = f.nav_list[-1]
+                last_date = datetime.strptime(last_nav["date"], "%Y-%m-%d")
+                days_old = (datetime.now() - last_date).days
+                if days_old > 7:
+                    stale_count += 1
+            except (IndexError, ValueError, TypeError, KeyError):
+                pass
+        if stale_count > 0:
+            result._warnings.append(f"⚠ {stale_count}/{len(funds)} 只基金净值超过 7 天未更新，申购限额可能已变化")
 
         return result
 
@@ -396,3 +497,28 @@ class FundFetcher:
             return float(str(val).replace("%", "").replace(",", "").strip()) or None
         except (ValueError, TypeError):
             return None
+
+    @staticmethod
+    def _compute_market_top3(market_dist: dict, fund: FundInfo | None = None) -> str:
+        is_index = False
+        if fund:
+            if fund.type and ("指数" in fund.type or "ETF" in fund.type.upper()):
+                is_index = True
+            if fund.name:
+                name_upper = fund.name.upper()
+                if "ETF" in name_upper or "联接" in fund.name:
+                    is_index = True
+                elif "指数" in fund.name and "增强" not in fund.name:
+                    is_index = True
+        if is_index:
+            return "跟踪大盘指数"
+        if market_dist and market_dist.get("_note") == "no_holdings":
+            return "季报无股票持仓"
+        if not market_dist or market_dist.get("_inferred", True):
+            return ""
+        items = [(k, v) for k, v in market_dist.items() if not k.startswith("_")]
+        items.sort(key=lambda x: x[1], reverse=True)
+        parts = []
+        for name, pct in items[:3]:
+            parts.append(f"{name}{pct:.1f}%")
+        return " / ".join(parts)

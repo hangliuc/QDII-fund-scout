@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -9,13 +10,16 @@ import requests
 from adapters import BaseAdapter, register
 from core.models import FundDataResult, DISCLAIMER
 
+logger = logging.getLogger(__name__)
+
 
 class FeishuAdapter(BaseAdapter):
     name = "feishu"
     required_config = ["webhook_url"]
 
-    def __init__(self, webhook_url: str = ""):
+    def __init__(self, webhook_url: str = "", timeout: int = 20):
         self.webhook_url = webhook_url or os.environ.get("FEISHU_WEBHOOK_URL", "")
+        self.timeout = timeout
 
     def send(self, data: FundDataResult, fmt: str = "card", **kwargs) -> bool:
         if not self.webhook_url:
@@ -31,11 +35,11 @@ class FeishuAdapter(BaseAdapter):
         else:
             payload = self._build_card(data, **kwargs)
         try:
-            resp = requests.post(self.webhook_url, json=payload, timeout=10)
+            resp = requests.post(self.webhook_url, json=payload, timeout=15)
             result = resp.json()
             return result.get("code", -1) == 0
         except Exception as e:
-            print(f"[feishu] 发送失败: {e}")
+            logger.warning("[feishu] 发送失败: %s", e)
             return False
 
     def test_connection(self) -> bool:
@@ -54,11 +58,11 @@ class FeishuAdapter(BaseAdapter):
             },
         }
         try:
-            resp = requests.post(self.webhook_url, json=payload, timeout=10)
+            resp = requests.post(self.webhook_url, json=payload, timeout=15)
             result = resp.json()
             return result.get("code", -1) == 0
         except Exception as e:
-            print(f"[feishu] 连接测试失败: {e}")
+            logger.warning("[feishu] 连接测试失败: %s", e)
             return False
 
     def _build_card(self, data: FundDataResult, **kwargs) -> dict[str, Any]:
@@ -84,12 +88,8 @@ class FeishuAdapter(BaseAdapter):
             code = fund.code
 
             cross_mark = ""
-            if fund._cross_validation:
-                cv_fields = ", ".join(d["field"] for d in fund._cross_validation)
-                cross_mark = f' ⚠<font color="grey">({cv_fields}数据存疑)</font>'
-            elif fund._cross_resolved:
-                cv_fields = ", ".join(d["field"] for d in fund._cross_resolved)
-                cross_mark = f' ℹ️<font color="grey">({cv_fields}已校验)</font>'
+            if fund._cross_validated:
+                cross_mark = ' ✅'
 
             r1y_val = self._to_float(fund.return_1y)
             if r1y_val is not None:
@@ -121,6 +121,15 @@ class FeishuAdapter(BaseAdapter):
                     ),
                 },
             })
+
+            if fund.market_top3:
+                elements.append({
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": f"市场投资TOP3：{fund.market_top3}",
+                    },
+                })
 
         if data._warnings:
             elements.append({"tag": "hr"})

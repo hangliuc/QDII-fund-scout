@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -9,13 +10,16 @@ import requests
 from adapters import BaseAdapter, register
 from core.models import FundDataResult, DISCLAIMER
 
+logger = logging.getLogger(__name__)
+
 
 class WechatAdapter(BaseAdapter):
     name = "wechat"
     required_config = ["webhook_url"]
 
-    def __init__(self, webhook_url: str = ""):
+    def __init__(self, webhook_url: str = "", timeout: int = 20):
         self.webhook_url = webhook_url or os.environ.get("WECHAT_WEBHOOK_URL", "")
+        self.timeout = timeout
 
     def send(self, data: FundDataResult, fmt: str = "markdown", **kwargs) -> bool:
         if not self.webhook_url:
@@ -31,11 +35,11 @@ class WechatAdapter(BaseAdapter):
         else:
             payload = self._build_markdown(data, **kwargs)
         try:
-            resp = requests.post(self.webhook_url, json=payload, timeout=10)
+            resp = requests.post(self.webhook_url, json=payload, timeout=15)
             result = resp.json()
             return result.get("errcode", -1) == 0
         except Exception as e:
-            print(f"[wechat] 发送失败: {e}")
+            logger.warning("[wechat] 发送失败: %s", e)
             return False
 
     def test_connection(self) -> bool:
@@ -46,11 +50,11 @@ class WechatAdapter(BaseAdapter):
             "markdown": {"content": "### QDII-fund-scout 连接测试\n> 企业微信适配器连接成功"},
         }
         try:
-            resp = requests.post(self.webhook_url, json=payload, timeout=10)
+            resp = requests.post(self.webhook_url, json=payload, timeout=15)
             result = resp.json()
             return result.get("errcode", -1) == 0
         except Exception as e:
-            print(f"[wechat] 连接测试失败: {e}")
+            logger.warning("[wechat] 连接测试失败: %s", e)
             return False
 
     def _build_markdown(self, data: FundDataResult, **kwargs) -> dict[str, Any]:
@@ -73,12 +77,8 @@ class WechatAdapter(BaseAdapter):
             code = fund.code
 
             cross_mark = ""
-            if fund._cross_validation:
-                cv_fields = ", ".join(d["field"] for d in fund._cross_validation)
-                cross_mark = f' ⚠({cv_fields}数据存疑)'
-            elif fund._cross_resolved:
-                cv_fields = ", ".join(d["field"] for d in fund._cross_resolved)
-                cross_mark = f' ℹ️({cv_fields}已校验)'
+            if fund._cross_validated:
+                cross_mark = ' ✅'
 
             r1y_val = WechatAdapter._to_float(fund.return_1y)
             if r1y_val is not None:
@@ -98,9 +98,11 @@ class WechatAdapter(BaseAdapter):
                 purchase_color = "info"
             purchase_line = f'<font color="{purchase_color}">{purchase_info}</font>'
 
+            market_line = f"\n市场投资TOP3：{fund.market_top3}" if fund.market_top3 else ""
+
             fund_blocks.append(
                 f"**{idx + 1}. {name}** {code}{cross_mark}\n"
-                f"{r1y_line}  |  {purchase_line}"
+                f"{r1y_line}  |  {purchase_line}{market_line}"
             )
 
         lines.append("\n---\n".join(fund_blocks))

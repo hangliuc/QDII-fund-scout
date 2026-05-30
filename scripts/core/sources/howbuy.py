@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 from core.models import FundInfo
@@ -31,20 +32,35 @@ class HowbuySource(BaseSource):
     def fetch_detail(self, code: str) -> FundInfo:
         info = FundInfo(code=code, data_source="howbuy")
 
-        html = self._get_with_retry(_FUND_URL.format(code=code), headers=HOWBUY_HEADERS)
-        if not html:
+        urls = [
+            _FUND_URL.format(code=code),
+            _FEE_URL.format(code=code),
+        ]
+
+        results: list[tuple[str, str | None]] = []
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            fut = {ex.submit(self._get_with_retry, u, 0, 15, HOWBUY_HEADERS): u for u in urls}
+            for f in as_completed(fut):
+                url = fut[f]
+                try:
+                    results.append((url, f.result()))
+                except Exception:
+                    results.append((url, None))
+
+        html_pool = dict(results)
+
+        main_html = html_pool.get(urls[0])
+        if not main_html:
             raise SourceError(self.name, f"无法获取基金 {code} 主页")
 
         try:
-            parsed = self._parse_main_page(html, code)
+            parsed = self._parse_main_page(main_html, code)
             for k, v in parsed.items():
                 setattr(info, k, v)
         except Exception as e:
             logger.warning("howbuy _parse_main_page(%s) 部分解析失败: %s", code, e)
 
-        self._sleep(0.3, 0.5)
-
-        fee_html = self._get_with_retry(_FEE_URL.format(code=code), headers=HOWBUY_HEADERS)
+        fee_html = html_pool.get(urls[1])
         if fee_html:
             try:
                 fee_parsed = self._parse_fee_page(fee_html, code)
