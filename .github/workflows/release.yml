@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: pip install pyinstaller requests pdfplumber yfinance pandas numpy
       - name: Build binary
-        run: pyinstaller --onefile scripts/cli.py --name fund-scout-win
+        run: pyinstaller --onefile scripts/cli.py --name fund-scout-win --paths scripts
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -38,7 +38,7 @@ jobs:
       - name: Install dependencies
         run: pip install pyinstaller requests pdfplumber yfinance pandas numpy
       - name: Build binary
-        run: pyinstaller --onefile scripts/cli.py --name fund-scout-mac
+        run: pyinstaller --onefile scripts/cli.py --name fund-scout-mac --paths scripts
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
