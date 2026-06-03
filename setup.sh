@@ -49,7 +49,7 @@ info "检测到 $PYVER"
 step "第2步：安装依赖包"
 
 info "正在安装 requests（网络请求）和 pdfplumber（PDF解析）..."
-$PYTHON -m pip install requests pdfplumber -q 2>&1 | tail -1
+$PYTHON -m pip install requests pdfplumber yfinance pandas numpy -q 2>&1 | tail -1
 info "依赖安装完成"
 
 # ── 第3步：配置推送渠道 ──────────────────────────
@@ -117,10 +117,8 @@ $PYTHON -c "
 import sys
 sys.path.insert(0, '.')
 from core.sources.eastmoney import EastMoneySource
-from core.sources.howbuy import HowbuySource
 from core.fetcher import FundFetcher
 print('EastMoneySource: OK')
-print('HowbuySource: OK')
 print('FundFetcher: OK')
 " 2>&1 | grep -v urllib3
 

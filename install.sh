@@ -98,7 +98,7 @@ fi
 step "第3步/4步：安装依赖包"
 
 info "正在安装 requests（网络请求）和 pdfplumber（PDF解析）..."
-$PYTHON -m pip install requests pdfplumber -q 2>&1 | tail -1
+$PYTHON -m pip install requests pdfplumber yfinance pandas numpy -q 2>&1 | tail -1
 info "依赖安装完成"
 
 # ── 第4步：验证安装 ──────────────────────────
@@ -109,7 +109,6 @@ $PYTHON -c "
 import sys
 sys.path.insert(0, '.')
 from core.sources.eastmoney import EastMoneySource
-from core.sources.howbuy import HowbuySource
 from core.fetcher import FundFetcher
 print('OK')
 " 2>&1 | grep -v urllib3 | grep -q "OK" && info "安装验证通过！" || warn "验证未完全通过，但通常不影响使用"

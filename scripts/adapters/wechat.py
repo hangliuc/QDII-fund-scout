@@ -100,9 +100,17 @@ class WechatAdapter(BaseAdapter):
 
             market_line = f"\n市场投资TOP3：{fund.market_top3}" if fund.market_top3 else ""
 
+            # T-1 估值预测
+            pred = fund._t1_prediction or {}
+            pred_line = ""
+            if pred:
+                p_text = WechatAdapter._format_prediction_md(pred)
+                if p_text:
+                    pred_line = "\n" + p_text
+
             fund_blocks.append(
                 f"**{idx + 1}. {name}** {code}{cross_mark}\n"
-                f"{r1y_line}  |  {purchase_line}{market_line}"
+                f"{r1y_line}  |  {purchase_line}{pred_line}{market_line}"
             )
 
         lines.append("\n---\n".join(fund_blocks))
@@ -159,6 +167,20 @@ class WechatAdapter(BaseAdapter):
             return "-"
         sign = "+" if v > 0 else ""
         return f"{sign}{v:.2f}%"
+
+    @staticmethod
+    def _format_prediction_md(pred: dict) -> str:
+        if not pred:
+            return ""
+        val = pred.get("value")
+        if val is None:
+            return ""
+        nav_date = pred.get("date", "")
+        is_est = pred.get("is_estimate", False)
+        sign = "+" if val > 0 else ""
+        color = "warning" if val > 0 else "info"
+        suffix = "（估算，仅供参考）" if is_est else ""
+        return f'{nav_date} 涨跌: <font color="{color}">{sign}{val:.2f}%</font>{suffix}'
 
 
 register(WechatAdapter.name, WechatAdapter)

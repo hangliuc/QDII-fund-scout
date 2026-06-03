@@ -105,8 +105,44 @@ python3 cli.py compare --config ~/.fund-scout/config.json --format md --push fei
 - 需要证监会季报市场/行业分布（最权威）→ `detail {code} --csrc`
 - 需要校验已有数据 → `validate data.json --profile qdii`
 - 需要推送到飞书/微信 → `--push feishu` / `--push wechat`
-- Python API 集成 → `from core.fetcher import FundFetcher`
+- 需要预测基金当日尚未公布的 NAV 涨跌（T-1 估值预测）→ `predict_cli.py {code}` 或 `compare {code} --format json`（agent 友好，JSON 自带 `t1_prediction` 字段）
+- Python API 集成 → `from core.fetcher import FundFetcher` / `from core.predict import Predictor`
 - 定时自动化 → 配合 SOLO Schedule / OpenClaw / Harness 使用
+
+## T-1 估值预测：agent 输出说明
+
+调用 `compare` 或 `detail` 时，**JSON 格式输出会自动包含每只基金的 `t1_prediction` 字段**：
+
+```jsonc
+{
+  "code": "012922",
+  "name": "易方达全球成长精选",
+  "t1_prediction": {
+    "valid": true,                            // 数据是否齐全（美股 T 日已收盘）
+    "target_date": "2026-06-02",              // 预测目标日（中国基金会计日）
+    "prev_date": "2026-06-01",                // 上一个已公布 NAV 日
+    "predicted_pct": 1.85,                    // 预测涨跌（%）
+    "model": "hybrid",
+    "reason": "",                             // valid=false 时的解释
+    "data_freshness": "live",                 // live=美股已收盘 / stale=美股未收盘
+    "us_data_date": "2026-06-02",             // 实际使用的美股数据日期
+    "components_top": [                       // 主要贡献因子（Top5）
+      {"name": "新易盛", "pp": 0.595},
+      {"name": "源杰科技", "pp": 0.558}
+    ],
+    "exposure_top10_pct": 51.8,               // Top10 持仓占基金净值比例
+    "report_quarter": "2026Q1",               // 持仓数据所属季报
+    "predicted_at": "2026-06-02 17:08"
+  }
+}
+```
+
+**Agent 必须遵守的展示规则**：
+- 始终标注「估算」或「预测」字样，不能让用户误以为是真实净值
+- `valid=false` 且 `data_freshness="stale"` 时，必须告诉用户「美股 T 日尚未收盘，预测会有滞后误差，建议北京时间次日凌晨 5:00 后再查」
+- `predicted_pct` 的颜色按 A 股习惯：正数红、负数绿（控制台 / 推送渠道遵循该约定）
+- 推送渠道（飞书/企业微信卡片）已自动渲染估算行，agent 转发时无需重复说明
+- 控制台 markdown 输出**不包含**估算（设计如此），如果 agent 需要估算应该用 `--format json`
 
 ## QDII 专项数据说明
 
@@ -161,7 +197,7 @@ QDII 基金与普通基金的关键差异，本 skill 已针对性处理：
 | `purchase_status` | 四态校验 | 显示「限购 100 元/天」实际是暂停申购 |
 | `purchase_limit` | 单位识别 + 数值范围 | 把 `100` 当成 100 万元 |
 | `total_fee` | 等于 mgmt + custody + service | 漏掉销售服务费导致 C 类费率失真 |
-| `return_*` | 主页面 + NAV API + 好买基金三路对照 | 排行接口未覆盖时返回空字符串 |
+| `return_*` | RANKING 全市场快照 + NAV API 独立对照 | 排行接口未覆盖时返回空字符串 |
 | `scale` | 主页和档案页交叉验证 | 主页延迟，用档案页更准 |
 | `drawdown_1y` | 必须分页拿全量 NAV | 单页 20 条→回撤严重偏小 |
 | `market_distribution` | 来自证监会季报 PDF；百分比合计 ≤ 100% | 天天基金的"地区分布"不准，必须用 CSRC 原文 |
@@ -170,14 +206,14 @@ QDII 基金与普通基金的关键差异，本 skill 已针对性处理：
 
 - 单只基金内部的全部 HTTP 请求使用 `ThreadPoolExecutor(max_workers=8)` 并发执行
 - 多只基金之间使用 `_fetch_batch_parallel` 并行获取（最多 4 workers）
-- 交叉验证（好买基金）与 CSRC 季报获取在同一线程池中并行执行，减少总耗时
+- 交叉验证与 CSRC 季报获取在同一线程池中并行执行，减少总耗时
 - 发生连续失败时自动降低并行度（`_fail_count` + `threading.Lock` 保护）
 - 单个请求超时 `timeout=20`
 
 ### 铁律 5 · 数据源降级与不可用处理
 
-主数据源（天天基金 eastmoney）获取失败时，自动切换到备用数据源（好买基金 howbuy）。
-两个数据源都失败时，`FundInfo.data_unavailable` 被标记为 `True`，`data_source` 为 `"unavailable"`。
+主数据源（天天基金 JJJZ/RANKING 全市场快照）获取失败时，自动降级到逐只 HTML 详情页抓取。
+全部失败时，`FundInfo.data_unavailable` 被标记为 `True`，`data_source` 为 `"unavailable"`。
 
 **Agent 必须检查 `data_unavailable` 字段：**
 - 如果 `data_unavailable == True`，**禁止**向用户展示该基金数据
@@ -195,8 +231,8 @@ QDII 基金与普通基金的关键差异，本 skill 已针对性处理：
 
 数据从天天基金（主）拉取后，自动做三层验证：
 
-1. **天天基金内部多路径验证**：通过 NAV API 独立计算近 1 年收益率，与主页面解析的收益率比对（差异 <1-2% 视为一致）
-2. **好买基金外部验证**：天天基金与好买基金比对申购状态、收益率、规模等关键字段
+1. **天天基金内部多路径验证**：通过 NAV API 独立计算近 1 年收益率，与 RANKING 接口的收益率比对（差异 <1-2% 视为一致）
+2. **JJJZ 与 RANKING 双快照一致性**：限购状态来自 JJJZ，收益率来自 RANKING，两者均为天天基金官方 JSON 接口
 3. **净值新鲜度检查**：最近净值日期是否超过 7 天，过期则提示"限额可能已变化"
 
 验证结果对用户完全透明：
@@ -507,13 +543,23 @@ Profile 决定必填字段集：
 ## Scripts
 
 - CLI 入口：`#[[file:scripts/cli.py]]`
+- T-1 估值预测 CLI：`#[[file:scripts/predict_cli.py]]`
+- 批量回测：`#[[file:scripts/run_backtest.py]]`
+- 报告生成器：`#[[file:scripts/generate_report.py]]`
 - 请求调度器：`#[[file:scripts/core/fetcher.py]]`
 - 数据模型：`#[[file:scripts/core/models.py]]`
 - 校验机制：`#[[file:scripts/core/validate.py]]`
 - 天天基金数据源（主）：`#[[file:scripts/core/sources/eastmoney.py]]`
-- 好买基金数据源（备用）：`#[[file:scripts/core/sources/howbuy.py]]`
+- 好买基金数据源（已移除，由 JJJZ/RANKING 全市场快照替代）
 - 数据源基类：`#[[file:scripts/core/sources/base.py]]`
 - 证监会数据源：`#[[file:scripts/core/sources/csrc.py]]`
+- 行情数据源（yfinance）：`#[[file:scripts/core/quotes/yfinance_quotes.py]]`
+- 估值预测调度器：`#[[file:scripts/core/predict/predictor.py]]`
+- 估值回测引擎：`#[[file:scripts/core/predict/backtest.py]]`
+- 预测模型 - Top10 加权：`#[[file:scripts/core/predict/models/top10_only.py]]`
+- 预测模型 - 地区代理：`#[[file:scripts/core/predict/models/region_proxy.py]]`
+- 预测模型 - 混合（Top10+残余）：`#[[file:scripts/core/predict/models/hybrid.py]]`
+- 预测模型 - 滚动校准：`#[[file:scripts/core/predict/models/calibrated.py]]`
 - JSON 格式化：`#[[file:scripts/formatters/json_fmt.py]]`
 - CSV 格式化：`#[[file:scripts/formatters/csv_fmt.py]]`
 - Markdown 格式化：`#[[file:scripts/formatters/markdown_fmt.py]]`

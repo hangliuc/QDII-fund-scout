@@ -11,7 +11,6 @@ from core.models import FundInfo, FundDataResult
 from core.validate import validate_data
 from core.sources.base import SourceError
 from core.sources.eastmoney import EastMoneySource
-from core.sources.howbuy import HowbuySource
 from core.sources.csrc import CSRCSource
 
 logger = logging.getLogger(__name__)
@@ -84,7 +83,6 @@ class FundFetcher:
     def __init__(self, rate_limit: float = 1.0):
         self.rate_limit = max(rate_limit, MIN_RATE_LIMIT)
         self._primary = EastMoneySource()
-        self._backup = HowbuySource()
         self._csrc = CSRCSource(rate_limit=self.rate_limit)
         self._fail_count = 0
         self._lock = threading.Lock()
@@ -116,25 +114,13 @@ class FundFetcher:
             self._record_success()
             return info
         except SourceError as e:
-            logger.warning("主数据源(eastmoney)获取 %s 失败: %s，尝试备用源(howbuy)", code, e)
+            logger.warning("天天基金获取 %s 失败: %s", code, e)
             self._record_fail()
         except Exception as e:
-            logger.warning("主数据源(eastmoney)获取 %s 异常: %s，尝试备用源(howbuy)", code, e)
+            logger.warning("天天基金获取 %s 异常: %s", code, e)
             self._record_fail()
 
-        try:
-            info = self._backup.fetch_detail(code)
-            self._record_success()
-            logger.info("备用源(howbuy)成功获取 %s", code)
-            return info
-        except SourceError as e:
-            logger.warning("备用源(howbuy)获取 %s 也失败: %s", code, e)
-            self._record_fail()
-        except Exception as e:
-            logger.warning("备用源(howbuy)获取 %s 异常: %s", code, e)
-            self._record_fail()
-
-        logger.error("所有数据源均无法获取基金 %s，返回降级结果", code)
+        logger.error("无法获取基金 %s，返回降级结果", code)
         return FundInfo(
             code=code,
             data_source="unavailable",
@@ -147,151 +133,20 @@ class FundFetcher:
     # 数据不一致 → 重试双方后仍不一致 → 透明标注具体差异
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _resolve_purchase_diff(primary: FundInfo, backup: FundInfo) -> dict | None:
-        ps, pl = primary.purchase_status, primary.purchase_limit
-        bs, bl = backup.purchase_status, backup.purchase_limit
-
-        if ps == bs and pl == bl:
-            return None
-
-        if _semantic_purchase_match(ps, pl, bs, bl):
-            if ps != bs or pl != bl:
-                old_status = ps
-                old_limit = pl
-                primary.purchase_status = bs
-                primary.purchase_limit = bl
-                return {
-                    "field": "purchase_status",
-                    "reason": "语义等价，自动对齐",
-                    "primary_original": old_status,
-                    "backup_value": bs,
-                    "resolved": bs,
-                    "note": "两源数据实际含义一致，已取更完整描述",
-                }
-            return None
-
-        a1 = _parse_limit_amount(pl)
-        a2 = _parse_limit_amount(bl)
-        if a1 is not None and a2 is not None and a1 != a2:
-            min_amt = min(a1, a2)
-            min_str = f"{min_amt:.0f}元" if min_amt < 10000 else f"{min_amt/10000:.0f}万元"
-            if min_amt != a1:
-                primary.purchase_limit = min_str
-            return {
-                "field": "purchase_limit",
-                "reason": "限额不一致，取低值确保准确性",
-                "primary_original": pl,
-                "backup_value": bl,
-                "resolved": min_str,
-            }
-
-        logger.info("申购状态天天与好买不一致（主源=%s, 备用源=%s），已取主源数据", ps, bs)
-        return {
-            "field": "purchase_status",
-            "reason": "两源不一致，以主源(eastmoney)为准",
-            "primary_original": ps,
-            "backup_value": bs,
-            "resolved": ps,
-        }
-
-    @staticmethod
-    def _resolve_numeric_diff(primary: FundInfo, backup: FundInfo, field: str, rule: dict) -> dict | None:
-        pv = FundFetcher._to_float(getattr(primary, field, None))
-        bv = FundFetcher._to_float(getattr(backup, field, None))
-        if pv is None and bv is None:
-            return None
-        if pv is None and bv is not None:
-            return None
-        if bv is None:
-            return None
-
-        diff = abs(pv - bv)
-        base_threshold = rule.get("diff", 1.0)
-        rel_diff = rule.get("rel_diff")
-        fmt_str = rule.get("fmt", ".2f")
-
-        if rel_diff:
-            max_v = max(abs(pv), abs(bv))
-            if max_v == 0:
-                return None
-            ratio = diff / max_v
-            if ratio <= rel_diff:
-                return None
-            return {
-                "field": field,
-                "action": "warning",
-                "reason": f"差异 {ratio*100:.0f}%（主源={format(pv,fmt_str)}, 备用源={format(bv,fmt_str)}）",
-                "primary": format(pv, fmt_str),
-                "backup": format(bv, fmt_str),
-                "diff": format(diff, fmt_str),
-            }
-
-        if diff <= base_threshold:
-            return None
-        return {
-            "field": field,
-            "action": "warning",
-            "reason": f"差异 {diff:.2f}{rule.get('unit', '')}（主源={format(pv,fmt_str)}, 备用源={format(bv,fmt_str)}）",
-            "primary": format(pv, fmt_str),
-            "backup": format(bv, fmt_str),
-            "diff": format(diff, fmt_str),
-        }
-
     def _cross_validate_fund(self, primary: FundInfo) -> FundInfo:
+        """内部校验：NAV API 独立计算收益率与主页面比对"""
         if primary.data_unavailable or not primary.code:
             return primary
 
-        # 第一步: 天天基金内部多路径验证（NAV API 独立计算收益率）
         nav_return = getattr(primary, "_nav_return_1y", None)
         main_return = FundFetcher._to_float(getattr(primary, "return_1y", None))
-        internal_validated: list[str] = []
 
         if nav_return is not None and main_return is not None:
             diff = abs(nav_return - main_return)
             threshold = 2.0 if abs(main_return) > 50 else 1.0
             if diff <= threshold:
-                internal_validated.append("收益率")
+                primary._cross_validated.append({"field": "收益率", "source": "主页面与NAV数据一致"})
 
-        # 第二步: 好买基金外部验证
-        try:
-            backup = self._backup.fetch_detail(primary.code)
-        except Exception as e:
-            logger.info("交叉验证 %s: 好买数据不可用，仅使用天天基金内部验证", primary.code)
-            if internal_validated:
-                primary._cross_validated.append({"field": "天天基金多路径", "source": "内部路径一致"})
-            return primary
-
-        validated: list[dict] = []
-        diffs: list[dict] = []
-
-        if internal_validated:
-            validated.append({"field": "收益率", "source": "主页面与NAV数据一致"})
-
-        all_numeric_fields = list(CROSS_VAL_THRESHOLDS.keys())
-        purchase_match = (primary.purchase_status == backup.purchase_status
-                          and primary.purchase_limit == backup.purchase_limit)
-
-        purchase_resolved = self._resolve_purchase_diff(primary, backup)
-        if purchase_resolved:
-            if purchase_match:
-                validated.append({"field": "申购状态", "source": "天天与好买一致"})
-            else:
-                diffs.append(purchase_resolved)
-
-        for field in all_numeric_fields:
-            rule = CROSS_VAL_THRESHOLDS[field]
-            pv = FundFetcher._to_float(getattr(primary, field, None))
-            bv = FundFetcher._to_float(getattr(backup, field, None))
-            if pv is None or bv is None:
-                continue
-            if abs(pv - bv) <= rule.get("diff", 1.0):
-                validated.append({"field": field, "source": "天天与好买一致"})
-            else:
-                diffs.append(self._resolve_numeric_diff(primary, backup, field, rule))
-
-        primary._cross_validated = validated
-        primary._cross_validation = diffs
         return primary
 
     # ------------------------------------------------------------------
@@ -357,7 +212,15 @@ class FundFetcher:
         return results
 
     def compare(self, codes: list[str] | None = None, keyword: str = "", fund_type: str = "",
-                cross_validate: bool = True, include_csrc: bool = True) -> FundDataResult:
+                cross_validate: bool = True, include_csrc: bool = True,
+                include_prediction: bool = False) -> FundDataResult:
+        """获取多只基金对比数据。
+
+        include_prediction:
+            True  - 同时为每只 QDII 基金计算 T-1 估值预测，结果写入 fund._t1_prediction。
+                    适用于推送 / UI 等需要"今日估算"信息的场景。
+            False - 跳过预测（默认），适用于 CLI 控制台简洁输出。
+        """
         fund_list: list[FundInfo] = []
 
         if codes:
@@ -431,7 +294,49 @@ class FundFetcher:
                     if not f.market_top3:
                         f.market_top3 = self._compute_market_top3(None, f)
 
+        # T-1 估值预测（默认关闭，仅推送/UI 启用）
+        if include_prediction:
+            self._enrich_with_t1_prediction(fund_list)
+
         return self._validate_and_build_result(fund_list, profile="compare")
+
+    def _enrich_with_t1_prediction(self, fund_list: list[FundInfo]) -> None:
+        """并行为每只 QDII 基金计算最新涨跌（真值或估算）。"""
+        try:
+            from core.predict_inline import predict_t1_for_fund
+        except ImportError as e:
+            logger.warning("预测模块不可用: %s", e)
+            return
+
+        targets = []
+        for f in fund_list:
+            if f.data_unavailable:
+                continue
+            type_str = (f.type or "") + (f.name or "")
+            if "QDII" not in type_str and "美元" not in type_str and "全球" not in type_str:
+                continue
+            targets.append(f)
+
+        if not targets:
+            return
+
+        with ThreadPoolExecutor(max_workers=min(len(targets), 4)) as ex:
+            fut_map = {}
+            for f in targets:
+                fut = ex.submit(
+                    predict_t1_for_fund,
+                    f.code,
+                    f.code,
+                    f.short_name or f.name,
+                )
+                fut_map[fut] = f
+            for fut in as_completed(fut_map):
+                f = fut_map[fut]
+                try:
+                    f._t1_prediction = fut.result(timeout=30)
+                except Exception as e:
+                    logger.warning("基金 %s 预测失败: %s", f.code, e)
+                    f._t1_prediction = {}
 
     def market_distribution(self, code: str, main_code: str = "", short_name: str = "") -> dict:
         self._check_fail()
@@ -470,7 +375,7 @@ class FundFetcher:
                 if f._cross_validated:
                     sources = set(d["source"] for d in f._cross_validated)
                     detail.append(f.name or f.code)
-            result._warnings.append(f"✅ {validated_count}/{len(funds)} 只基金已通过交叉验证（天天基金+好买基金）")
+            result._warnings.append(f"✅ {validated_count}/{len(funds)} 只基金已通过内部校验")
 
         stale_count = 0
         for f in funds:

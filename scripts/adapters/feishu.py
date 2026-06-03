@@ -122,6 +122,16 @@ class FeishuAdapter(BaseAdapter):
                 },
             })
 
+            # T-1 估值预测（如果启用且数据有效）
+            pred = fund._t1_prediction or {}
+            if pred:
+                pred_text = self._format_prediction_lark(pred)
+                if pred_text:
+                    elements.append({
+                        "tag": "div",
+                        "text": {"tag": "lark_md", "content": pred_text},
+                    })
+
             if fund.market_top3:
                 elements.append({
                     "tag": "div",
@@ -194,6 +204,20 @@ class FeishuAdapter(BaseAdapter):
             return "-"
         sign = "+" if v > 0 else ""
         return f"{sign}{v:.2f}%"
+
+    @staticmethod
+    def _format_prediction_lark(pred: dict) -> str:
+        if not pred:
+            return ""
+        val = pred.get("value")
+        if val is None:
+            return ""
+        nav_date = pred.get("date", "")
+        is_est = pred.get("is_estimate", False)
+        sign = "+" if val > 0 else ""
+        color = "red" if val > 0 else "green"
+        suffix = "（估算，仅供参考）" if is_est else ""
+        return f'{nav_date} 涨跌: <font color="{color}">{sign}{val:.2f}%</font>{suffix}'
 
 
 register(FeishuAdapter.name, FeishuAdapter)

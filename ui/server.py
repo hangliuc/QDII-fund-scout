@@ -61,6 +61,7 @@ def _fund_to_row(fund) -> dict:
         "drawdown_1y": fund.drawdown_1y,
         "manager_name": fund.manager_name,
         "market_top3": fund.market_top3 or "",
+        "t1_prediction": fund._t1_prediction or {},
     }
 
 
@@ -68,7 +69,11 @@ def _run_query(codes: list[str]) -> dict:
     global _last_result, _last_codes
     from core.fetcher import FundFetcher
     fetcher = FundFetcher(rate_limit=0.3)
-    result = fetcher.compare(codes=codes, cross_validate=True, include_csrc=True)
+    # UI 默认启用 T-1 估值预测（标注估算并提示数据时点）
+    result = fetcher.compare(
+        codes=codes, cross_validate=True, include_csrc=True,
+        include_prediction=True,
+    )
     _last_result = result
     _last_codes = set(codes)
     rows = [_fund_to_row(f) for f in result.funds]

@@ -40,3 +40,7 @@ scheduled_push.sh
 
 # Logs
 *.log
+
+
+# 回测原始数据（4MB，仅生成报告时用）
+reports/*_data.json

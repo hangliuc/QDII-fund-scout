@@ -6,7 +6,7 @@ from typing import Any
 
 
 DISCLAIMER = (
-    "数据来源：天天基金、好买基金、证监会等公开渠道 | "
+    "数据来源：天天基金、证监会等公开渠道 | "
     "仅供个人学习参考，不构成任何投资建议 | "
     "历史业绩不代表未来表现，申购限额随时变动 | "
     "数据版权归原始平台所有，禁止商业转载和使用"
@@ -57,10 +57,12 @@ class FundInfo:
     _nav_return_1y: float | None = None
     market_top3: str = ""
     _purchase_info: str = ""
+    _t1_prediction: dict = field(default_factory=dict)  # T-1 估值预测结果（详见 predict_inline.predict_t1_for_fund）
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["purchase_info"] = self._purchase_info
+        d["t1_prediction"] = self._t1_prediction
         return d
 
 

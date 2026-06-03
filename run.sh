@@ -94,9 +94,10 @@ show_menu() {
     echo "    8) 配置推送渠道（飞书/企业微信）"
     echo "    9) 设置每日定时推送（自动运行）"
     echo "    10) 取消定时推送"
+    echo "    11) 检查并刷新季报持仓数据（用于 T-1 估值预测）"
     echo "    0) 退出"
     echo ""
-    read -p "  请输入数字 (0-10): " CHOICE
+    read -p "  请输入数字 (0-11): " CHOICE
     echo ""
 }
 
@@ -119,7 +120,7 @@ run_compare() {
     fi
 
     echo ""
-    info "正在查询，请耐心等待（每只基金约需 1-2 秒）..."
+    info "正在查询..."
     echo ""
     eval "$CMD"
     local EXIT_CODE=$?
@@ -312,6 +313,10 @@ start_ui() {
 
     echo "  正在启动本地 Web 服务..."
     echo ""
+
+    # 先关闭已有的 8765 端口进程
+    lsof -ti:8765 2>/dev/null | xargs kill -9 2>/dev/null || true
+    sleep 0.5
 
     python3 server.py &
     local PID=$!
@@ -673,13 +678,26 @@ main() {
             10)
                 remove_schedule
                 ;;
+            11)
+                clear
+                title "检查并刷新季报持仓数据"
+                echo "  说明: QDII 基金每季度披露持仓 (Q1=4月下旬, Q2=7月下旬,"
+                echo "        Q3=10月下旬, Q4=次年1月下旬)"
+                echo "        此功能会自动检查所有基金是否有新季报，"
+                echo "        命中则下载并更新本地缓存。"
+                echo ""
+                cd "$SCRIPT_DIR/scripts"
+                python3 holdings_refresh.py
+                echo ""
+                read -p "按回车键返回主菜单..."
+                ;;
             0)
                 echo ""
                 info "再见！"
                 exit 0
                 ;;
             *)
-                warn "无效选择，请输入 0-10"
+                warn "无效选择，请输入 0-11"
                 sleep 1
                 ;;
         esac
