@@ -22,10 +22,20 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="$HOME/.fund-scout/config.json"
 
 # ── 检查依赖 ──────────────────────────
+PYTHON_BIN=""
+if command -v python3 &>/dev/null; then
+    PYTHON_BIN=python3
+elif command -v python &>/dev/null; then
+    PYTHON_BIN=python
+else
+    error "未检测到 Python，请先安装 Python 3.6+"
+    exit 1
+fi
+
 check_deps() {
-    if ! python3 -c "import requests" 2>/dev/null; then
+    if ! $PYTHON_BIN -c "import requests" 2>/dev/null; then
         warn "缺少依赖，正在安装..."
-        python3 -m pip install requests pdfplumber -q
+        $PYTHON_BIN -m pip install requests pdfplumber -q
         info "依赖安装完成"
     fi
 }
@@ -33,7 +43,7 @@ check_deps() {
 # ── 读取配置中的基金列表 ──────────────────────────
 read_my_funds() {
     if [ -f "$CONFIG_FILE" ]; then
-        python3 -c "
+        $PYTHON_BIN -c "
 import json
 with open('$CONFIG_FILE') as f:
     cfg = json.load(f)
@@ -47,7 +57,7 @@ for f in funds:
 # ── 读取配置中的推送渠道 ──────────────────────────
 read_push_urls() {
     if [ -f "$CONFIG_FILE" ]; then
-        python3 -c "
+        $PYTHON_BIN -c "
 import json
 with open('$CONFIG_FILE') as f:
     cfg = json.load(f)
@@ -107,7 +117,7 @@ run_compare() {
     local push_target="$2"
 
     cd "$SCRIPT_DIR/scripts"
-    CMD="python3 cli.py compare --format md --style table"
+    CMD="$PYTHON_BIN cli.py compare --format md --style table"
 
     if [ -n "$codes" ]; then
         CMD="$CMD $codes"
@@ -177,8 +187,8 @@ edit_funds() {
         FEISHU=""
         WECHAT=""
         if [ -f "$CONFIG_FILE" ]; then
-            FEISHU=$(python3 -c "import json; f=open('$CONFIG_FILE'); d=json.load(f); print(d.get('push',{}).get('feishu_webhook','')); f.close()" 2>/dev/null || true)
-            WECHAT=$(python3 -c "import json; f=open('$CONFIG_FILE'); d=json.load(f); print(d.get('push',{}).get('wechat_webhook','')); f.close()" 2>/dev/null || true)
+            FEISHU=$($PYTHON_BIN -c "import json; f=open('$CONFIG_FILE'); d=json.load(f); print(d.get('push',{}).get('feishu_webhook','')); f.close()" 2>/dev/null || true)
+            WECHAT=$($PYTHON_BIN -c "import json; f=open('$CONFIG_FILE'); d=json.load(f); print(d.get('push',{}).get('wechat_webhook','')); f.close()" 2>/dev/null || true)
         fi
 
         cat > "$CONFIG_FILE" <<CONFEOF
@@ -217,7 +227,7 @@ edit_push() {
 
     # 读取已有的
     if [ -f "$CONFIG_FILE" ]; then
-        FEISHU_URL=$(python3 -c "
+        FEISHU_URL=$($PYTHON_BIN -c "
 import json
 with open('$CONFIG_FILE') as f:
     d = json.load(f)
@@ -449,7 +459,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 cd "$SCRIPT_DIR/scripts"
-python3 cli.py compare --config "$CONFIG_FILE" --push feishu,wechat >> "$HOME/.fund-scout/schedule.log" 2>&1
+$PYTHON_BIN cli.py compare --config "$CONFIG_FILE" --push feishu,wechat >> "$HOME/.fund-scout/schedule.log" 2>&1
 echo "[$(date)] 推送完成" >> "$HOME/.fund-scout/schedule.log"
 SHSCRIPT
     chmod +x "$SCHEDULE_SCRIPT"
@@ -687,7 +697,7 @@ main() {
                 echo "        命中则下载并更新本地缓存。"
                 echo ""
                 cd "$SCRIPT_DIR/scripts"
-                python3 holdings_refresh.py
+                $PYTHON_BIN holdings_refresh.py
                 echo ""
                 read -p "按回车键返回主菜单..."
                 ;;

@@ -1,0 +1,62 @@
+name: Build and Release QDII-fund-scout Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: pip install pyinstaller requests pdfplumber yfinance pandas numpy
+      - name: Build binary
+        run: pyinstaller --onefile scripts/cli.py --name fund-scout-win
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fund-scout-win
+          path: dist/fund-scout-win.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: pip install pyinstaller requests pdfplumber yfinance pandas numpy
+      - name: Build binary
+        run: pyinstaller --onefile scripts/cli.py --name fund-scout-mac
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fund-scout-mac
+          path: dist/fund-scout-mac
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: fund-scout-win
+      - uses: actions/download-artifact@v4
+        with:
+          name: fund-scout-mac
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            fund-scout-win.exe
+            fund-scout-mac
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
