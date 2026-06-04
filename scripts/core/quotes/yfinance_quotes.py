@@ -252,26 +252,6 @@ def map_fund_name_to_ticker(name: str) -> str | None:
     return None
 
 
-def _wrap_yf_download(original_download, session):
-    """包装 yfinance.download，静音 HTTP 错误，统一转 QuoteError"""
-    import contextlib, io, sys
-
-    def _download(*args, **kwargs):
-        kwargs["session"] = session
-        # 完全静音 yfinance 内部 HTTP 错误输出
-        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
-            try:
-                df = original_download(*args, **kwargs)
-                if df is None or df.empty:
-                    raise QuoteError("yfinance 返回空数据")
-                return df
-            except QuoteError:
-                raise
-            except Exception as e:
-                raise QuoteError(f"yfinance 下载失败: {e}") from e
-    return _download
-
-
 class QuoteSource:
     """yfinance 行情数据源（带本地 CSV 缓存）"""
 
@@ -285,27 +265,12 @@ class QuoteSource:
     def _get_yf(self):
         if self._yf is None:
             import logging
-            import requests
-            # 静音 yfinance 内部 HTTP 错误输出
+            # 静音 yfinance 内部日志
             logging.getLogger("yfinance").setLevel(logging.CRITICAL)
             logging.getLogger("yfinance.shared").setLevel(logging.CRITICAL)
+            logging.getLogger("urllib3").setLevel(logging.CRITICAL)
 
             import yfinance as yf  # noqa: WPS433
-
-            # 用真实浏览器 User-Agent 初始化 requests session
-            session = requests.Session()
-            session.headers.update({
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-                "Connection": "keep-alive",
-            })
-            self._yf_session = session
-            yf.download = _wrap_yf_download(yf.download, session)
             try:
                 yf.set_tz_cache_location(os.path.join(self.cache_dir, "..", ".yf_tz_cache"))
             except Exception:
@@ -367,14 +332,17 @@ class QuoteSource:
         buf_start = (datetime.fromisoformat(start) - timedelta(days=5)).date().isoformat()
         buf_end = (datetime.fromisoformat(end) + timedelta(days=2)).date().isoformat()
         try:
-            df = yf.download(
-                ticker,
-                start=buf_start,
-                end=buf_end,
-                auto_adjust=True,
-                progress=False,
-                threads=False,
-            )
+            # 静音 yfinance 内部 HTTP 错误输出（401 等）
+            import contextlib, io
+            with contextlib.redirect_stderr(io.StringIO()):
+                df = yf.download(
+                    ticker,
+                    start=buf_start,
+                    end=buf_end,
+                    auto_adjust=True,
+                    progress=False,
+                    threads=False,
+                )
         except Exception as e:
             raise QuoteError(f"yfinance 下载 {ticker} 失败: {e}") from e
 
