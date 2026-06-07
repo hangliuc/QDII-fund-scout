@@ -9,12 +9,5 @@
   "push": {
     "feishu_webhook": "",
     "wechat_webhook": ""
-  },
-  "defaults": {
-    "format": "md",
-    "style": "table",
-    "profile": "qdii",
-    "include_holdings": true,
-    "include_csrc": true
   }
 }

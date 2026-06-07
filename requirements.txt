@@ -1,0 +1,13 @@
+# QDII-fund-scout 运行时依赖
+# 选择已知稳定的版本范围，yfinance 接口变动较快需要严格 pin。
+
+# 网络请求
+requests>=2.31,<3.0
+
+# CSRC 季报 PDF 解析
+pdfplumber>=0.10,<0.12
+
+# 行情数据（T-1 估值预测使用）
+yfinance>=0.2.40,<0.3
+pandas>=2.0,<3.0
+numpy>=1.24,<3.0

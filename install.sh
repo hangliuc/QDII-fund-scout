@@ -97,8 +97,14 @@ fi
 # ── 第3步：安装依赖 ──────────────────────────
 step "第3步/4步：安装依赖包"
 
-info "正在安装 requests（网络请求）和 pdfplumber（PDF解析）..."
-$PYTHON -m pip install requests pdfplumber yfinance pandas numpy -q 2>&1 | tail -1
+REQ_FILE="$INSTALL_DIR/requirements.txt"
+if [ -f "$REQ_FILE" ]; then
+    info "正在按 requirements.txt 安装依赖..."
+    $PYTHON -m pip install -r "$REQ_FILE" -q 2>&1 | tail -1
+else
+    info "正在安装 requests / pdfplumber / yfinance / pandas / numpy ..."
+    $PYTHON -m pip install requests pdfplumber yfinance pandas numpy -q 2>&1 | tail -1
+fi
 info "依赖安装完成"
 
 # ── 第4步：验证安装 ──────────────────────────
@@ -137,14 +143,16 @@ step "安装完成 🎉"
 echo ""
 echo "  启动方式："
 echo ""
-echo "  方式1：快捷命令（新开终端后生效）"
+echo "  方式 1：快捷命令（新开终端后生效）"
 echo "      fund-scout"
 echo ""
-echo "  方式2：直接运行"
+echo "  方式 2：直接运行（打开浏览器界面）"
 echo "      bash $INSTALL_DIR/run.sh"
 echo ""
-echo "  方式3：可视化界面"
-echo "      bash $INSTALL_DIR/run.sh  → 选 1) 打开可视化界面"
+echo "  方式 3：自动化 / cron / SSH（无 UI）"
+echo "      python3 $INSTALL_DIR/scripts/cli.py --help"
+echo "      python3 $INSTALL_DIR/scripts/holdings_refresh.py --help"
+echo "      python3 $INSTALL_DIR/scripts/schedule_setup.py --help"
 echo ""
 echo "  更新方式："
 if command -v git &>/dev/null; then

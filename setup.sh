@@ -48,8 +48,14 @@ info "检测到 $PYVER"
 # ── 第2步：安装依赖 ──────────────────────────
 step "第2步：安装依赖包"
 
-info "正在安装 requests（网络请求）和 pdfplumber（PDF解析）..."
-$PYTHON -m pip install requests pdfplumber yfinance pandas numpy -q 2>&1 | tail -1
+REQ_FILE="$SCRIPT_DIR/requirements.txt"
+if [ -f "$REQ_FILE" ]; then
+    info "正在按 requirements.txt 安装依赖..."
+    $PYTHON -m pip install -r "$REQ_FILE" -q 2>&1 | tail -1
+else
+    info "正在安装 requests / pdfplumber / yfinance / pandas / numpy ..."
+    $PYTHON -m pip install requests pdfplumber yfinance pandas numpy -q 2>&1 | tail -1
+fi
 info "依赖安装完成"
 
 # ── 第3步：配置推送渠道 ──────────────────────────
@@ -130,17 +136,15 @@ step "安装完成 🎉"
 echo ""
 echo "  下一步："
 echo ""
-echo "  📋 查看持仓基金申购限额和收益率："
+echo "  📋 启动浏览器可视化界面："
 echo "      cd $SCRIPT_DIR && bash run.sh"
 echo ""
-echo "  📋 或直接命令行运行："
-echo "      cd $SCRIPT_DIR/scripts"
-echo "      python3 cli.py compare 012870,006479,008971"
+echo "  📋 自动化 / cron / SSH 用法（命令行）："
+echo "      python3 $SCRIPT_DIR/scripts/cli.py --help"
+echo "      python3 $SCRIPT_DIR/scripts/holdings_refresh.py --help"
+echo "      python3 $SCRIPT_DIR/scripts/schedule_setup.py --help"
 echo ""
-echo "  📋 推送到飞书/企业微信："
-echo "      cd $SCRIPT_DIR/scripts"
-echo "      python3 cli.py compare 012870,006479 --push feishu"
-echo ""
-echo "  📝 修改我的基金列表："
-echo "      vim $CONFIG_FILE"
+echo "  📋 修改我的基金列表："
+echo "      在浏览器界面中操作（推荐）"
+echo "      或手动编辑：$CONFIG_FILE"
 echo ""

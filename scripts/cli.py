@@ -11,6 +11,7 @@ import re
 import sys
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 压制内部库的杂音告警，用户只看我们显式 print 的内容
 warnings.filterwarnings("ignore", message=".*OpenSSL.*")
@@ -20,27 +21,13 @@ logging.basicConfig(level=logging.ERROR, format="%(message)s")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.models import FundInfo, FundDataResult
-from core.fetcher import FundFetcher as CoreFetcher
+from core.fetcher import FundFetcher as CoreFetcher, _build_purchase_info
 from core.sources.eastmoney import EastMoneySource
+from core.sources.eastmoney_bulk import BulkSnapshot
 from core.sources.csrc import CSRCSource
 from core.sources.base import SourceError
 from core.validate import validate_data, print_report
 from adapters import get_adapter, list_adapters
-
-
-def _build_purchase_info(status: str, limit: str, effectively_closed: bool) -> str:
-    if effectively_closed or status == "\u6682\u505c":
-        return "\u6682\u505c\u7533\u8d2d"
-    if status == "\u9650\u5c0f\u989d":
-        m = re.search(r"([\d.]+)\s*(\u4e07|\u5143)?", str(limit or ""))
-        if m:
-            return f"\u9650\u5c0f\u989d {limit}"
-        return f"\u9650\u5c0f\u989d {limit}" if limit else "\u9650\u5c0f\u989d\uff08\u8bf7\u4ee5\u5e73\u53f0\u4e3a\u51c6\uff09"
-    if status == "\u9650\u5927\u989d":
-        return f"\u9650\u5927\u989d\uff08{limit}\uff09" if limit else "\u9650\u5927\u989d"
-    if status in ("\u5f00\u653e", "\u5f00\u653e\u7533\u8d2d"):
-        return "\u5f00\u653e\u7533\u8d2d\uff08\u65e0\u9650\u989d\uff09"
-    return f"{status}\uff08{limit}\uff09" if limit else status
 
 
 CONFIG_DIR = os.path.expanduser("~/.fund-scout")
@@ -55,8 +42,159 @@ def _load_config(path: str | None = None) -> dict:
         return json.load(f)
 
 
+def _save_config(cfg: dict, path: str | None = None) -> None:
+    p = path or CONFIG_PATH
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    # 原子写：先写临时文件再 rename
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, p)
+
+
 def _ensure_config_dir() -> None:
     os.makedirs(CONFIG_DIR, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# funds 子命令：读写 ~/.fund-scout/config.json 中的 my_funds 列表
+# 设计目的：让 AI Agent 能用自然语言维护用户的基金列表，
+# 用户和浏览器界面共享同一份持久化配置。
+# ---------------------------------------------------------------------------
+
+def _parse_fund_token(token: str) -> tuple[str, str]:
+    """把 '012870' / '012870:易方达纳指100C' / '012870 易方达纳指100C' 解析成 (code, name)"""
+    token = token.strip()
+    if not token:
+        return ("", "")
+    # 支持 ':' 和空格作为分隔符
+    for sep in (":", " ", "\t"):
+        if sep in token:
+            parts = token.split(sep, 1)
+            return (parts[0].strip(), parts[1].strip())
+    return (token, "")
+
+
+def _validate_fund_code(code: str) -> str:
+    """校验基金代码是否合法（6 位数字）"""
+    code = code.strip()
+    if not re.match(r"^\d{6}$", code):
+        return f"基金代码必须是 6 位数字: {code!r}"
+    return ""
+
+
+def cmd_funds(args: argparse.Namespace) -> None:
+    cfg = _load_config()
+    funds = cfg.setdefault("my_funds", [])
+    by_code = {f["code"]: f for f in funds if f.get("code")}
+
+    action = args.action
+
+    if action == "list":
+        if args.format == "json":
+            print(json.dumps(funds, ensure_ascii=False, indent=2))
+        else:
+            if not funds:
+                print("（基金列表为空）")
+                print(f"配置文件: {CONFIG_PATH}")
+                return
+            print(f"已保存 {len(funds)} 只基金:\n")
+            for i, f in enumerate(funds, 1):
+                print(f"  {i:>2}. {f.get('code', ''):<8s} {f.get('name', '')}")
+            print(f"\n配置文件: {CONFIG_PATH}")
+        return
+
+    if action == "add":
+        if not args.tokens:
+            print("❌ 请提供至少一个基金代码")
+            sys.exit(1)
+        added: list[dict] = []
+        skipped: list[str] = []
+        invalid: list[str] = []
+        for token in args.tokens:
+            code, name = _parse_fund_token(token)
+            err = _validate_fund_code(code)
+            if err:
+                invalid.append(err)
+                continue
+            if code in by_code:
+                # 已存在：name 非空时更新名称
+                if name and by_code[code].get("name") != name:
+                    by_code[code]["name"] = name
+                    added.append({"code": code, "name": name, "updated": True})
+                else:
+                    skipped.append(code)
+                continue
+            entry = {"code": code}
+            if name:
+                entry["name"] = name
+            funds.append(entry)
+            by_code[code] = entry
+            added.append(entry)
+
+        if added or skipped or invalid:
+            _save_config(cfg)
+
+        if args.format == "json":
+            print(json.dumps({
+                "added": added, "skipped": skipped, "invalid": invalid,
+                "total": len(funds),
+            }, ensure_ascii=False, indent=2))
+        else:
+            for item in added:
+                tag = "更新" if item.get("updated") else "已添加"
+                name_part = f" ({item['name']})" if item.get("name") else ""
+                print(f"✓ {tag}: {item['code']}{name_part}")
+            for code in skipped:
+                print(f"· 已存在，跳过: {code}")
+            for err in invalid:
+                print(f"✗ {err}")
+            print(f"\n当前共 {len(funds)} 只基金")
+        return
+
+    if action == "remove":
+        if not args.tokens:
+            print("❌ 请提供至少一个基金代码")
+            sys.exit(1)
+        removed: list[str] = []
+        not_found: list[str] = []
+        for token in args.tokens:
+            code = token.strip()
+            if code in by_code:
+                funds[:] = [f for f in funds if f.get("code") != code]
+                del by_code[code]
+                removed.append(code)
+            else:
+                not_found.append(code)
+        if removed:
+            _save_config(cfg)
+        if args.format == "json":
+            print(json.dumps({
+                "removed": removed, "not_found": not_found, "total": len(funds),
+            }, ensure_ascii=False, indent=2))
+        else:
+            for code in removed:
+                print(f"✓ 已移除: {code}")
+            for code in not_found:
+                print(f"· 不在列表中: {code}")
+            print(f"\n当前共 {len(funds)} 只基金")
+        return
+
+    if action == "clear":
+        if not args.yes:
+            print("⚠ 此操作会清空所有基金。请加 --yes 确认。")
+            sys.exit(1)
+        n = len(funds)
+        cfg["my_funds"] = []
+        _save_config(cfg)
+        if args.format == "json":
+            print(json.dumps({"cleared": n}, ensure_ascii=False))
+        else:
+            print(f"✓ 已清空 {n} 只基金")
+        return
+
+    print(f"❌ 未知操作: {action}")
+    sys.exit(1)
 
 
 class FundFetcher:
@@ -64,7 +202,6 @@ class FundFetcher:
         self.em = EastMoneySource()
         self.csrc = CSRCSource()
         # 全市场快照（2 次 HTTP 搞定所有基金的核心数据）
-        from core.sources.eastmoney_bulk import BulkSnapshot
         self._bulk = BulkSnapshot()
 
     def fetch_detail(self, code: str, holdings: bool = False, csrc: bool = False) -> FundInfo:
@@ -121,8 +258,6 @@ class FundFetcher:
                 pass  # HTML 也失败就保持 unavailable
 
         # 并行补充 scale/fee/drawdown（每只 ~1s，并行后总耗时 ~1-2s）
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        from core.sources.eastmoney_bulk import BulkSnapshot
         enrich_targets = [f for f in results if not f.data_unavailable]
         if enrich_targets:
             with ThreadPoolExecutor(max_workers=min(len(enrich_targets), 6)) as ex:
@@ -167,7 +302,6 @@ class FundFetcher:
             from core.predict_inline import predict_t1_for_fund
         except ImportError:
             return
-        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         targets = []
         for f in funds:
@@ -203,12 +337,15 @@ def _format_csv(data: dict) -> str:
     funds = data.get("funds", [])
     if not funds:
         return ""
+    # 收集所有 fund 的 keys 并集，避免后续 fund 多出字段时 DictWriter 抛异常
+    fieldnames = sorted({k for f in funds for k in f.keys()})
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=list(funds[0].keys()))
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     for f in funds:
         row = {}
-        for k, v in f.items():
+        for k in fieldnames:
+            v = f.get(k, "")
             if isinstance(v, (dict, list)):
                 row[k] = json.dumps(v, ensure_ascii=False)
             else:
@@ -330,19 +467,20 @@ def _sep_line(cols: list[int], left: str, sep: str, right: str, fill: str = "─
 
 def _format_rich_table(funds: list[dict]) -> str:
     # 动态表头：根据数据判断"最新涨跌"是真值还是估算
-    has_estimate = any(
-        (f.get("t1_prediction") or {}).get("is_estimate") for f in funds
-    )
+    preds = [(f.get("t1_prediction") or {}) for f in funds]
+    has_estimate = any(p.get("is_estimate") for p in preds if p)
     has_published = any(
-        (f.get("t1_prediction") or {}) and not (f.get("t1_prediction") or {}).get("is_estimate")
-        for f in funds
+        (p.get("value") is not None and not p.get("is_estimate"))
+        for p in preds
     )
     if has_estimate and has_published:
         change_label = "最新涨跌(部分估算)"
     elif has_estimate:
         change_label = "最新涨跌(估算)"
-    else:
+    elif has_published:
         change_label = "最新涨跌(已公布)"
+    else:
+        change_label = "最新涨跌"
 
     cols_with_label = [
         (k, change_label if k == "latest_change" else lbl, mn, mx)
@@ -544,8 +682,9 @@ def cmd_search(args: argparse.Namespace) -> None:
     path = _write_output(content, args.output, filename)
     print(f"\n已保存: {path}")
 
+    # search 只返回基金清单（不含详情字段），不支持推送
     if args.push:
-        _push(content, args.push)
+        print("⚠ search 命令不支持 --push，请先用 compare 拉取详情后再推送")
 
 
 def cmd_validate(args: argparse.Namespace) -> None:
@@ -616,6 +755,47 @@ def build_parser() -> argparse.ArgumentParser:
     p_test = sub.add_parser("test", help="测试适配器连接")
     p_test.add_argument("adapter", choices=["feishu", "wechat"], help="适配器名称")
     p_test.set_defaults(func=cmd_test)
+
+    # ── funds: 维护用户基金列表（agent 友好）──────────────────
+    p_funds = sub.add_parser(
+        "funds",
+        help="读写用户基金列表（持久化到 ~/.fund-scout/config.json）",
+        description=(
+            '维护用户的"我的基金"列表。\n'
+            "Agent 调用约定：每次新对话开始时先 `funds list --format json` 读取持久化的基金，\n"
+            "用户提到新基金时用 `funds add ...` 写回。这样跨对话状态保持一致。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    funds_sub = p_funds.add_subparsers(dest="action", required=True)
+
+    p_list = funds_sub.add_parser("list", help="列出已保存的基金")
+    p_list.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_add = funds_sub.add_parser(
+        "add",
+        help="添加基金（可批量）",
+        description=(
+            "支持的格式：\n"
+            "  funds add 012870\n"
+            "  funds add 012870:易方达纳指100C\n"
+            "  funds add '012870:易方达纳指100C' '006479:广发纳指100C'\n"
+            "  funds add 012870 006479 008971              # 不指定名字"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_add.add_argument("tokens", nargs="+", help="基金代码（可附加冒号 + 名称）")
+    p_add.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_rm = funds_sub.add_parser("remove", help="移除基金")
+    p_rm.add_argument("tokens", nargs="+", help="要移除的基金代码")
+    p_rm.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_clear = funds_sub.add_parser("clear", help="清空所有基金")
+    p_clear.add_argument("--yes", action="store_true", help="确认清空（必填）")
+    p_clear.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_funds.set_defaults(func=cmd_funds)
 
     return parser
 
