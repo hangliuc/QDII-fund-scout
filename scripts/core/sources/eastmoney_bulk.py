@@ -202,11 +202,10 @@ class BulkSnapshot:
                 info.purchase_limit = ""
 
             fee = jjjz[12] if len(jjjz) > 12 else ""
-            if fee and fee != "0.00%":
-                try:
-                    info.service_fee = float(fee.rstrip("%"))
-                except (ValueError, TypeError):
-                    pass
+            # 注意：JJJZ 这个字段对 C 类基金不准（往往只是 A 类的销售服务费），
+            # 不写入 service_fee，留给 enrich_fund 从档案页获取。
+            # 见 commit 历史：002891 等 C 类 total_fee 因此被算错。
+            _ = fee  # 保留字段读取以便将来调试
         else:
             info.data_unavailable = True
             info.data_source = "unavailable"
@@ -240,20 +239,25 @@ class BulkSnapshot:
     def enrich_fund(info: FundInfo, timeout: int = 10) -> None:
         """从天天基金档案页补充 scale / fee / drawdown（单只 ~1秒）。
 
-        仅当这些字段为 None 时才拉取，已有值不覆盖。
-        供 fetch_batch 并行调用。
+        费率字段（mgmt_fee / custody_fee / service_fee / total_fee）以
+        档案页为准，整体覆盖 BulkSnapshot 可能写入的不准值。
+        scale / drawdown_1y 为 None 时才补。
         """
         if info.data_unavailable:
             return
         # 进程级 enrich 缓存：5 分钟 TTL
-        # 复用相同 code 多次 compare 时跳过重复网络
         cached = _ENRICH_CACHE.get(info.code)
         if cached is not None:
             cached_data, cached_at = cached
             if time.time() - cached_at < _ENRICH_TTL_SECONDS:
-                # 命中：把缓存值复制过来（仅当当前 info 没值时）
-                for k in ("scale", "mgmt_fee", "custody_fee", "service_fee",
-                          "total_fee", "drawdown_1y"):
+                # 命中：把缓存值整组覆盖到 info（费率组要么都来自档案页，
+                # 要么都没有；不能新旧混合）
+                FEE_KEYS = ("mgmt_fee", "custody_fee", "service_fee", "total_fee")
+                if any(cached_data.get(k) is not None for k in FEE_KEYS):
+                    for k in FEE_KEYS:
+                        setattr(info, k, cached_data.get(k))
+                # 非费率字段：缺则补
+                for k in ("scale", "drawdown_1y"):
                     if getattr(info, k, None) is None and cached_data.get(k) is not None:
                         setattr(info, k, cached_data[k])
                 return
@@ -261,31 +265,35 @@ class BulkSnapshot:
         code = info.code
         headers = {"User-Agent": "Mozilla/5.0", "Referer": "http://fund.eastmoney.com/"}
 
-        # 1) 档案页: 规模 + 费率
-        if info.scale is None or info.total_fee is None:
-            try:
-                url = f"http://fundf10.eastmoney.com/jbgk_{code}.html"
-                resp = requests.get(url, headers=headers, timeout=timeout)
-                if resp.status_code == 200:
-                    text = resp.text
-                    import re
-                    m = re.search(r'资产规模.*?([\d.,]+)\s*亿', text)
-                    if m and info.scale is None:
-                        info.scale = float(m.group(1).replace(",", ""))
-                    m = re.search(r'管理费率.*?([\d.]+)%', text)
-                    if m:
-                        info.mgmt_fee = float(m.group(1))
-                    m = re.search(r'托管费率.*?([\d.]+)%', text)
-                    if m:
-                        info.custody_fee = float(m.group(1))
-                    m = re.search(r'销售服务费率.*?([\d.]+)%', text)
-                    if m:
-                        info.service_fee = float(m.group(1))
-                    fees = [info.mgmt_fee or 0, info.custody_fee or 0, info.service_fee or 0]
-                    if any(f > 0 for f in fees):
-                        info.total_fee = round(sum(fees), 4)
-            except Exception:
-                pass
+        # 1) 档案页：规模 + 费率（费率以档案页为准，整组覆盖）
+        try:
+            url = f"http://fundf10.eastmoney.com/jbgk_{code}.html"
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            if resp.status_code == 200:
+                text = resp.text
+                import re
+                m = re.search(r'资产规模.*?([\d.,]+)\s*亿', text)
+                if m and info.scale is None:
+                    info.scale = float(m.group(1).replace(",", ""))
+                # 重置费率字段后重新解析（保证一致性）
+                info.mgmt_fee = None
+                info.custody_fee = None
+                info.service_fee = None
+                info.total_fee = None
+                m = re.search(r'管理费率.*?([\d.]+)%', text)
+                if m:
+                    info.mgmt_fee = float(m.group(1))
+                m = re.search(r'托管费率.*?([\d.]+)%', text)
+                if m:
+                    info.custody_fee = float(m.group(1))
+                m = re.search(r'销售服务费率.*?([\d.]+)%', text)
+                if m:
+                    info.service_fee = float(m.group(1))
+                fees = [info.mgmt_fee or 0, info.custody_fee or 0, info.service_fee or 0]
+                if any(f > 0 for f in fees):
+                    info.total_fee = round(sum(fees), 4)
+        except Exception:
+            pass
 
         # 2) NAV API: 近 1 年回撤（需要 ~250 条 NAV 数据）
         if info.drawdown_1y is None:
