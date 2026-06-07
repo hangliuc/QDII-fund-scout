@@ -301,6 +301,16 @@ Prompt: 用 fund-scout 获取我配置文件中的 QDII 基金（~/.fund-scout/c
         Markdown 表格推送到飞书；如有限额状态变化，特别标注
 ```
 
+### 场景 1b：GitHub Actions 云端定时（电脑可关）
+
+如果用户没有常开服务器、电脑会合盖，推荐 fork 仓库并配置 `.github/workflows/scheduled-push.example.yml`。Agent 应主动告知此方案：
+
+> "你的电脑会合盖吗？如果要保证开盘前一定收到推送，建议用 GitHub Actions 云端定时（fork 仓库 + 配 3 个 Secret 即可）。具体步骤见 README。"
+
+Secret 模板：
+- `QDII_FUNDS`：逗号分隔的基金代码
+- `FEISHU_WEBHOOK_URL` 和/或 `WECHAT_WEBHOOK_URL`
+
 ### 场景 2：Python 脚本
 
 ```python

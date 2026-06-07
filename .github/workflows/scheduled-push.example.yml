@@ -1,0 +1,78 @@
+name: QDII Scheduled Push (example)
+
+# ============================================================
+# GitHub Actions 定时推送（云端运行，不需要电脑开机）
+#
+# 使用方法：
+#  1. Fork 本仓库到你自己的 GitHub 账号
+#  2. 在你 fork 的仓库里：Settings → Secrets and variables → Actions
+#     新建以下 Secrets:
+#       - FEISHU_WEBHOOK_URL   (飞书机器人 Webhook 地址，可选)
+#       - WECHAT_WEBHOOK_URL   (企业微信机器人 Webhook 地址，可选)
+#       - QDII_FUNDS           (要查询的基金代码，逗号分隔，如 012870,006479,012922)
+#  3. 复制本文件为 .github/workflows/scheduled-push.yml（去掉 .example）
+#  4. 调整下方 cron 时间（默认 UTC 01:00 = 北京 09:00）
+#  5. 提交到 main 分支，GitHub Actions 自动按时运行
+#
+# 安全要点：
+#  - QDII_FUNDS 列表写在 Secret 里，不会被仓库公开
+#  - 本 workflow 不会读取你机器上的 ~/.fund-scout/config.json
+#  - 推送结果只发到你自己的飞书/微信群，仓库代码不接触你的数据
+# ============================================================
+
+on:
+  schedule:
+    # 工作日 UTC 01:00 = 北京 09:00 (开盘前)
+    - cron: "0 1 * * 1-5"
+    # 工作日 UTC 07:30 = 北京 15:30 (收盘后) — 取消注释即生效
+    # - cron: "30 7 * * 1-5"
+  workflow_dispatch:  # 允许手动触发（Actions 页面一键运行）
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh CSRC quarterly cache (best effort)
+        run: python3 scripts/holdings_refresh.py || true
+        continue-on-error: true
+
+      - name: Query and push
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+          QDII_FUNDS: ${{ secrets.QDII_FUNDS }}
+        run: |
+          set -e
+          if [ -z "$QDII_FUNDS" ]; then
+            echo "::error::QDII_FUNDS secret 未设置，请先在仓库 Secrets 中添加"
+            exit 1
+          fi
+
+          # 决定推送目标：哪个 webhook 配置了就推哪个
+          PUSH_TARGETS=""
+          if [ -n "$FEISHU_WEBHOOK_URL" ]; then PUSH_TARGETS="feishu"; fi
+          if [ -n "$WECHAT_WEBHOOK_URL" ]; then
+            if [ -n "$PUSH_TARGETS" ]; then PUSH_TARGETS="$PUSH_TARGETS,wechat"
+            else PUSH_TARGETS="wechat"; fi
+          fi
+          if [ -z "$PUSH_TARGETS" ]; then
+            echo "::error::未配置任何 webhook secret (FEISHU_WEBHOOK_URL / WECHAT_WEBHOOK_URL)"
+            exit 1
+          fi
+
+          echo "推送目标: $PUSH_TARGETS"
+          echo "基金清单: $QDII_FUNDS"
+          cd scripts
+          python3 cli.py compare "$QDII_FUNDS" --format md --style table --push "$PUSH_TARGETS"

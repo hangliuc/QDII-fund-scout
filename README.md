@@ -154,6 +154,10 @@ for fund in result.funds:
 
 ### 每日定时推送
 
+定时推送有 **两种方式**，按"电脑能否常开"二选一：
+
+#### 方式 A：本机定时（电脑常开）
+
 浏览器界面 → 右上角齿轮按钮 → "每日定时推送"：
 
 - 工作日 09:00 / 15:30 / 每天 09:00 等预设
@@ -166,6 +170,22 @@ for fund in result.funds:
 - 日志：`~/.fund-scout/schedule.log`
 
 定时脚本会自动先刷新季报缓存再推送，所以新季报披露后无感跟进。底层由 `scripts/schedule_setup.py` 统一管理。
+
+#### 方式 B：GitHub Actions 云端定时（推荐，电脑无需开机）
+
+适用场景：用笔记本、电脑会合盖、希望"开盘前一定收得到推送"。完全在 GitHub 服务器跑，免费。
+
+1. **Fork 本仓库**到你自己的 GitHub 账号
+2. 在你 fork 的仓库：**Settings → Secrets and variables → Actions** 添加：
+   - `FEISHU_WEBHOOK_URL`（可选）
+   - `WECHAT_WEBHOOK_URL`（可选，至少配一个）
+   - `QDII_FUNDS`（要查询的基金代码，逗号分隔，如 `012870,006479,012922`）
+3. 复制 `.github/workflows/scheduled-push.example.yml` 为 `.github/workflows/scheduled-push.yml`（去掉 `.example`）
+4. 提交到 `main` 分支，GitHub Actions 自动按时跑，结果直接推到你的群
+
+> 默认 cron 是工作日北京 09:00（UTC 01:00），可在 yml 里改。  
+> 也可以在仓库 Actions 页面 **手动触发**一次（workflow_dispatch）测试。  
+> 你的基金清单在 Secret 里，仓库公开也不会泄露。
 
 ---
 
