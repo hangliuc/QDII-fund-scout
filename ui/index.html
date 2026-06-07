@@ -3,587 +3,757 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QDII-fund-scout</title>
+<title>QDII Fund Scout</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700;800;900&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@200;300;400;500;600;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
 </style>
 <style>
 *,*::before,*::after{box-sizing:border-box}
 html,body{margin:0;padding:0;height:100%}
 
-body{
-  --bg:#f5f5f7;
-  --bg-card:#ffffff;
-  --border:rgba(0,0,0,.10);
-  --border-focus:rgba(0,113,227,.5);
-  --ink:#1d1d1f;
-  --ink2:#86868b;
-  --ink3:#aeaeb3;
-  --accent:#0071e3;
-  --accent-hover:#0077ed;
-  --green:#1aaf6c;
-  --red:#d32f2f;
-  --cyan:#0077b6;
-  --blue:#0071e3;
-  --surface-input:#ffffff;
-  --radius:12px;
-  --radius-sm:8px;
-  --btn-bg:rgba(0,113,227,.08);
-  --btn-border:rgba(0,113,227,.25);
-  --btn-hover:rgba(0,113,227,.18);
-  --warn-bg:rgba(0,113,227,.05);
-  --warn-border:rgba(0,113,227,.15);
-  --row-hover:rgba(0,0,0,.02);
-  --status-pause:var(--red);
-  --status-small:#e65100;
-  --status-open:var(--green);
-  background:var(--bg);
-  color:var(--ink);
-  font-family:'Inter','Noto Sans SC',-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;
-  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+:root {
+  --bg: #f5f5f7;
+  --bg-card: #ffffff;
+  --bg-subtle: #f0f0f3;
+  --border: rgba(0,0,0,.10);
+  --border-strong: rgba(0,0,0,.18);
+  --border-focus: rgba(0,113,227,.5);
+  --ink: #1d1d1f;
+  --ink2: #555;
+  --ink3: #86868b;
+  --ink4: #aeaeb3;
+  --accent: #0071e3;
+  --accent-hover: #0077ed;
+  --green: #1aaf6c;
+  --red: #d32f2f;
+  --orange: #e65100;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow-card: 0 1px 2px rgba(0,0,0,.04);
+  --shadow-pop: 0 8px 28px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
+  --row-hover: rgba(0,0,0,.025);
 }
 
-.container{max-width:1200px;margin:0 auto;padding:20px 20px 48px}
-@media(max-width:768px){.container{padding:12px 10px 32px}}
-
-.head{text-align:center;padding:12px 0 8px}
-.head h1{font-size:32px;font-weight:700;letter-spacing:-.02em;margin:4px 0 2px;line-height:1.15;color:var(--ink)}
-.head .sub{font-size:13px;color:var(--ink2)}
-@media(max-width:600px){.head h1{font-size:24px}}
-
-/* cards */
-.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:14px}
-.card h3{font-size:14px;font-weight:600;margin:0 0 12px;color:var(--ink)}
-
-/* form */
-.fund-row{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
-.fund-row select,.fund-row input{background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink);padding:9px 12px;font-size:14px;font-family:inherit;outline:none;transition:border-color .2s}
-.fund-row select:focus,.fund-row input:focus{border-color:var(--border-focus);box-shadow:0 0 0 2px color-mix(in srgb,var(--border-focus) 20%,transparent)}
-.fund-row select option{background:var(--bg-card);color:var(--ink)}
-.fund-row input::placeholder{color:var(--ink3);opacity:.6}
-.fund-row input[type="text"]{flex:1;min-width:0}
-
-/* buttons */
-.btn{display:inline-flex;align-items:center;justify-content:center;padding:9px 18px;border:none;border-radius:var(--radius-sm);font-size:14px;font-weight:500;font-family:inherit;cursor:pointer;transition:all .2s;white-space:nowrap;gap:6px}
-.btn:active{transform:scale(.97)}
-.btn-blue{background:#0071e3;color:#fff}
-.btn-blue:hover{background:#0077ed}
-.btn-green{background:#1aaf6c;color:#fff}
-.btn-green:hover{background:#1dbd76}
-.btn-query{background:#7c3aed;color:#fff}
-.btn-query:hover{background:#6d28d9}
-.btn-sm{padding:5px 12px;font-size:12px}
-.btn-small{padding:7px 14px;font-size:13px}
-.btn-outline{background:transparent;color:var(--ink2);border:1px solid var(--border)}
-.btn-outline:hover{background:rgba(0,0,0,.04);color:var(--ink)}
-
-/* fund list */
-.fund-list{margin-top:10px}
-.fund-item{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}
-.fund-item:last-child{border-bottom:none}
-.fund-item .code{font-weight:600;font-size:14px;color:var(--accent);font-family:'JetBrains Mono',monospace}
-.fund-item .name{font-size:13px;color:var(--ink2);margin-left:12px}
-.fund-item .remove-btn{background:none;border:none;color:var(--red);cursor:pointer;font-size:18px;padding:2px 6px;line-height:1;opacity:.5;transition:opacity .2s;border-radius:4px}
-.fund-item .remove-btn:hover{opacity:1;background:rgba(211,47,47,.08)}
-
-/* push config */
-.push-row{display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap}
-.push-row label{font-size:13px;color:var(--ink2);min-width:60px;font-weight:500}
-.push-row input[type="text"]{flex:1;min-width:160px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink);padding:9px 12px;font-size:13px;font-family:inherit;outline:none;transition:border-color .2s}
-.push-row input[type="text"]:focus{border-color:var(--border-focus);box-shadow:0 0 0 2px color-mix(in srgb,var(--border-focus) 20%,transparent)}
-.push-hint{font-size:11px;color:var(--ink3);margin:-4px 0 8px 68px}
-
-/* action bar */
-.action-bar{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:16px 0}
-.action-bar .btn{padding:11px 24px;font-size:15px;font-weight:600}
-@media(max-width:600px){.action-bar .btn{flex:1;text-align:center;font-size:14px;padding:10px 12px}}
-
-/* loading */
-.loading{display:none;text-align:center;padding:24px;color:var(--ink2)}
-.loading.active{display:block}
-.spinner{display:inline-block;width:22px;height:22px;border:2.5px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:10px}
-@keyframes spin{to{transform:rotate(360deg)}}
-
-/* warnings */
-.warnings{background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;display:none}
-.warnings.show{display:block}
-.warning-item{padding:3px 0;color:var(--ink2)}
-
-/* table */
-.table-wrap{overflow-x:auto;margin-bottom:10px;border-radius:var(--radius-sm);border:1px solid var(--border)}
-.result-table{width:100%;border-collapse:collapse;font-size:13px;display:none}
-.result-table.show{display:table}
-.result-table th{padding:8px 10px;text-align:left;font-weight:600;font-size:12px;color:var(--ink2);border-bottom:1px solid var(--border);white-space:nowrap;background:var(--bg)}
-.result-table td{padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;font-size:13px}
-.result-table tr:last-child td{border-bottom:none}
-.result-table tr:hover td{background:var(--row-hover)}
-.result-table .num{text-align:right;font-variant-numeric:tabular-nums;font-family:'JetBrains Mono',monospace;font-size:12px}
-.result-table .red{color:var(--red);font-weight:500}
-.result-table .green{color:var(--green);font-weight:500}
-.result-table .status-pause{color:var(--status-pause);font-weight:600}
-.result-table .status-limit-small{color:var(--status-small)}
-.result-table .status-open{color:var(--status-open);font-weight:500}
-.result-table .market-top3{font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis}
-.result-table .pred-col{font-size:13px;white-space:nowrap}
-.pred-hint{margin:8px 0;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;color:var(--ink2)}
-
-/* empty */
-.empty-state{text-align:center;padding:24px;color:var(--ink3);font-size:13px}
-
-/* toast */
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg-card);color:var(--ink);padding:10px 20px;border-radius:8px;font-size:13px;border:1px solid var(--border);box-shadow:0 4px 16px rgba(0,0,0,.08);opacity:0;transition:opacity .25s;z-index:99999;pointer-events:none}
-.toast.show{opacity:1}
-
-/* footer */
-.footer{text-align:center;padding:16px 0 8px;font-size:11px;color:var(--ink3);border-top:1px solid var(--border);margin-top:16px;line-height:1.8}
-.footer-note{font-size:11px;color:var(--ink3);opacity:.7}
-
-/* responsive */
-@media(max-width:600px){
-  .fund-row{flex-direction:column}
-  .push-row{flex-direction:column;align-items:stretch}
-  .push-row label{min-width:auto}
-  .push-hint{margin-left:0}
-  .result-table{font-size:12px}
-  .result-table th,.result-table td{padding:6px 6px}
-  .result-table .market-top3{max-width:120px}
+[data-theme="dark"] {
+  --bg: #0a0a0c;
+  --bg-card: #16171a;
+  --bg-subtle: #1f2024;
+  --border: rgba(255,255,255,.08);
+  --border-strong: rgba(255,255,255,.18);
+  --border-focus: rgba(0,113,227,.6);
+  --ink: #f5f5f7;
+  --ink2: #c7c7cc;
+  --ink3: #8e8e93;
+  --ink4: #5a5a5f;
+  --shadow-card: 0 1px 2px rgba(0,0,0,.3);
+  --shadow-pop: 0 8px 28px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.3);
+  --row-hover: rgba(255,255,255,.04);
 }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  line-height: 1.5;
+  transition: background .2s, color .2s;
+}
+
+/* ============ 顶栏 ============ */
+.topbar {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(255,255,255,.85);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--border);
+}
+[data-theme="dark"] .topbar { background: rgba(22,23,26,.85); }
+.topbar-inner {
+  max-width: 1200px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px;
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 15px; font-weight: 700; letter-spacing: -.01em;
+  color: var(--ink); text-decoration: none;
+}
+.brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; }
+.topbar-actions { display: flex; gap: 6px; align-items: center; }
+.icon-btn {
+  background: transparent; border: 1px solid transparent;
+  width: 34px; height: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--ink2);
+  transition: all .15s;
+  position: relative;
+}
+.icon-btn:hover { background: var(--bg-subtle); color: var(--ink); }
+.icon-btn svg { width: 18px; height: 18px; }
+.icon-btn .badge {
+  position: absolute; top: 6px; right: 6px;
+  min-width: 8px; height: 8px; border-radius: 50%;
+  background: var(--green); border: 2px solid var(--bg-card);
+}
+.icon-btn .badge.warn { background: var(--orange); }
+
+/* ============ 主体 ============ */
+.container { max-width: 1200px; margin: 0 auto; padding: 16px 20px 48px; }
+@media (max-width: 768px) { .container { padding: 12px 12px 32px; } }
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 12px;
+}
+.card-pad { padding: 16px 18px; }
+.card-title {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 0 0 10px;
+  font-size: 13px; font-weight: 600; color: var(--ink2);
+  text-transform: uppercase; letter-spacing: .03em;
+}
+.card-title .meta { font-size: 12px; color: var(--ink3); font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+/* ============ 我的基金（chip 区）============ */
+.fund-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fund-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 6px 5px 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  font-size: 12px;
+  transition: all .15s;
+}
+.fund-chip:hover { border-color: var(--border-strong); }
+.fund-chip .fc-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px; font-weight: 600; color: var(--accent);
+}
+.fund-chip .fc-name { color: var(--ink2); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fund-chip .fc-remove {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: transparent; border: none; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--ink3); font-size: 14px; line-height: 1;
+}
+.fund-chip .fc-remove:hover { background: rgba(211,47,47,.12); color: var(--red); }
+.fund-add-btn {
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  border-radius: 100px;
+  padding: 5px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink2);
+  transition: all .15s;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.fund-add-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(0,113,227,.05); }
+.empty-tip { color: var(--ink3); font-size: 13px; padding: 8px 0; }
+
+/* ============ 主操作区 ============ */
+.action-area {
+  margin-top: 14px; padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.push-toggles { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.push-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--ink2); cursor: pointer;
+  user-select: none;
+}
+.push-toggle input[type=checkbox] {
+  width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; margin: 0;
+}
+.push-toggle.disabled { color: var(--ink4); cursor: not-allowed; }
+.push-toggle.disabled input { cursor: not-allowed; }
+
+.btn-primary {
+  margin-left: auto;
+  background: var(--accent); color: white;
+  border: none; padding: 9px 24px;
+  border-radius: 8px; font-size: 14px; font-weight: 600;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  transition: all .15s;
+}
+.btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+.btn-primary:active { transform: translateY(0); }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; transform: none !important; }
+.btn-primary svg { width: 14px; height: 14px; }
+
+@media (max-width: 600px) {
+  .action-area { flex-direction: column; align-items: stretch; }
+  .btn-primary { margin-left: 0; justify-content: center; }
+}
+
+/* ============ 元信息条 ============ */
+.meta-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  font-size: 12px; color: var(--ink3);
+  padding: 8px 16px;
+  background: transparent;
+  margin-bottom: 8px;
+}
+.meta-bar .dot { color: var(--ink4); }
+.meta-bar .fresh { color: var(--green); font-weight: 500; }
+.meta-bar .stale { color: var(--orange); font-weight: 500; }
+
+/* ============ 加载/警告 ============ */
+.loading-bar {
+  display: none; padding: 16px;
+  text-align: center; color: var(--ink2); font-size: 13px;
+}
+.loading-bar.show { display: block; }
+.spinner {
+  display: inline-block; width: 16px; height: 16px;
+  border: 2px solid var(--border-strong); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin .7s linear infinite;
+  vertical-align: middle; margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.banner {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-bottom: 10px;
+  display: none;
+}
+.banner.show { display: block; }
+.banner.warn { background: rgba(230,81,0,.1); border: 1px solid rgba(230,81,0,.25); color: var(--ink2); }
+.banner.info { background: rgba(0,113,227,.08); border: 1px solid rgba(0,113,227,.20); color: var(--ink2); }
+
+/* ============ 表格 ============ */
+.table-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.table-scroll { overflow-x: auto; }
+.result-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.result-table th {
+  padding: 10px 12px; text-align: left;
+  font-weight: 600; font-size: 12px; color: var(--ink3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-subtle);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  position: sticky; top: 0;
+}
+.result-table th:hover { color: var(--ink); }
+.result-table th .sort-arrow { display: inline-block; margin-left: 4px; opacity: .4; font-size: 10px; }
+.result-table th.sorted .sort-arrow { opacity: 1; color: var(--accent); }
+.result-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.result-table tr:last-child td { border-bottom: none; }
+.result-table tr:hover td { background: var(--row-hover); }
+.result-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+.result-table .red { color: var(--red); font-weight: 500; }
+.result-table .green { color: var(--green); font-weight: 500; }
+.result-table .ink-mute { color: var(--ink3); font-size: 11px; }
+.result-table .name-col strong { font-weight: 600; }
+.result-table .code-col {
+  color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 12px;
+}
+.result-table .status-pause { color: var(--red); font-weight: 600; }
+.result-table .status-limit { color: var(--orange); font-weight: 500; }
+.result-table .status-open { color: var(--green); font-weight: 500; }
+.result-table .market-top3 { font-size: 12px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+
+.empty-result {
+  padding: 36px; text-align: center; color: var(--ink4); font-size: 13px;
+}
+
+@media (max-width: 600px) {
+  .result-table { font-size: 12px; }
+  .result-table th, .result-table td { padding: 8px 6px; }
+  .result-table .market-top3 { max-width: 110px; }
+}
+
+/* ============ 模态框 ============ */
+.modal-mask {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.4);
+  display: none; align-items: center; justify-content: center;
+  z-index: 200;
+  padding: 20px;
+}
+.modal-mask.show { display: flex; }
+.modal {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  width: 100%; max-width: 560px; max-height: 90vh;
+  display: flex; flex-direction: column;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+}
+.modal-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.modal-body { padding: 14px 18px; overflow-y: auto; flex: 1; }
+.modal-foot {
+  padding: 12px 18px; border-top: 1px solid var(--border);
+  display: flex; gap: 8px; justify-content: flex-end;
+  background: var(--bg-subtle);
+}
+
+/* 输入控件统一样式 */
+input[type="text"], input[type="search"], input[type="url"], select {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--ink);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+  width: 100%;
+}
+input:focus, select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(0,113,227,.12);
+}
+input.invalid { border-color: var(--red); }
+input.invalid:focus { box-shadow: 0 0 0 3px rgba(211,47,47,.15); }
+.field-error {
+  color: var(--red); font-size: 11px; margin-top: 4px;
+  display: none;
+}
+.field-error.show { display: block; }
+
+/* 按钮基础样式 */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 8px 16px; font-size: 13px; font-weight: 500;
+  border-radius: 8px; border: 1px solid transparent;
+  cursor: pointer; transition: all .15s;
+  background: transparent; color: var(--ink);
+  font-family: inherit;
+}
+.btn:hover { background: var(--bg-subtle); }
+.btn-blue { background: var(--accent); color: white; border-color: var(--accent); }
+.btn-blue:hover { background: var(--accent-hover); }
+.btn-outline { border-color: var(--border-strong); color: var(--ink2); }
+.btn-outline:hover { background: var(--bg-subtle); color: var(--ink); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+
+/* 添加基金弹层 */
+.search-wrap { position: relative; }
+.search-wrap input { padding-left: 34px; }
+.search-wrap svg {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; color: var(--ink3); pointer-events: none;
+}
+
+.tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 12px; }
+.tag-pill {
+  padding: 4px 10px; border-radius: 100px;
+  background: var(--bg-subtle); border: 1px solid var(--border);
+  font-size: 12px; color: var(--ink2); cursor: pointer;
+  transition: all .15s;
+}
+.tag-pill.active {
+  background: var(--accent); border-color: var(--accent); color: white;
+}
+.tag-pill:not(.active):hover { border-color: var(--border-strong); }
+
+.fund-pick-list {
+  max-height: 320px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg);
+}
+.fund-pick-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background .1s;
+}
+.fund-pick-item:last-child { border-bottom: none; }
+.fund-pick-item:hover { background: var(--bg-subtle); }
+.fund-pick-item.checked { background: rgba(0,113,227,.06); }
+.fund-pick-item input[type="checkbox"] {
+  width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0;
+}
+.fund-pick-item .fpi-code {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  color: var(--accent); font-weight: 600; min-width: 60px;
+}
+.fund-pick-item .fpi-name {
+  flex: 1; min-width: 0; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fund-pick-item .fpi-tags { display: flex; gap: 4px; flex-shrink: 0; }
+.fund-pick-item .fpi-tag {
+  font-size: 10px; padding: 1px 6px; border-radius: 4px;
+  background: var(--bg-subtle); color: var(--ink3);
+  border: 1px solid var(--border);
+}
+
+.manual-input-row {
+  display: flex; gap: 8px; align-items: center;
+  margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.manual-input-row input { flex: 1; }
+.manual-input-row .lookup-status {
+  font-size: 11px; color: var(--ink3); white-space: nowrap;
+  min-width: 80px;
+}
+
+/* 设置抽屉 */
+.drawer-mask {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.4);
+  display: none; z-index: 200;
+}
+.drawer-mask.show { display: block; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: 100%; max-width: 480px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-pop);
+  z-index: 201;
+  display: flex; flex-direction: column;
+  transform: translateX(100%);
+  transition: transform .25s ease;
+}
+.drawer.show { transform: translateX(0); }
+@media (max-width: 600px) { .drawer { max-width: 100%; } }
+.drawer-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.drawer-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.drawer-body { padding: 16px 18px; overflow-y: auto; flex: 1; }
+.drawer-section { margin-bottom: 24px; }
+.drawer-section h3 {
+  margin: 0 0 10px; font-size: 12px; font-weight: 600;
+  color: var(--ink3); text-transform: uppercase; letter-spacing: .04em;
+}
+.field { margin-bottom: 10px; }
+.field label {
+  display: block; margin-bottom: 4px;
+  font-size: 12px; color: var(--ink2); font-weight: 500;
+}
+.field-inline { display: flex; gap: 6px; align-items: stretch; }
+.field-hint { font-size: 11px; color: var(--ink3); margin-top: 4px; }
+
+.schedule-status {
+  font-size: 12px; color: var(--ink2); margin-bottom: 10px;
+  padding: 8px 10px; background: var(--bg-subtle); border-radius: 6px;
+}
+.schedule-status .ok { color: var(--green); font-weight: 500; }
+.schedule-status .off { color: var(--ink3); }
+
+/* ============ Toast ============ */
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--bg-card); color: var(--ink);
+  padding: 10px 18px; border-radius: 8px; font-size: 13px;
+  border: 1px solid var(--border); box-shadow: var(--shadow-pop);
+  opacity: 0; transition: opacity .2s;
+  z-index: 999; pointer-events: none; max-width: 90vw;
+}
+.toast.show { opacity: 1; }
+.toast.error { background: var(--red); color: white; border-color: var(--red); }
+.toast.success { background: var(--green); color: white; border-color: var(--green); }
+
+/* ============ 页脚 ============ */
+.footer {
+  text-align: center;
+  padding: 24px 0 8px;
+  font-size: 11px; color: var(--ink4);
+  border-top: 1px solid var(--border);
+  margin-top: 24px; line-height: 1.7;
+}
+
+/* 缓存折叠面板（保留低频功能）*/
+details.cache-card { background: transparent; border: none; box-shadow: none; }
+details.cache-card summary {
+  cursor: pointer; list-style: none;
+  padding: 8px 12px; font-size: 12px; color: var(--ink3);
+  display: flex; justify-content: space-between; align-items: center;
+}
+details.cache-card[open] summary { color: var(--ink2); }
+.cache-stats {
+  margin-top: 10px; padding: 10px 12px;
+  background: var(--bg-subtle); border-radius: 6px;
+  font-size: 11px; color: var(--ink2);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* hidden helper */
+.hidden { display: none !important; }
 </style>
 </head>
 <body>
 
+<!-- ============ 顶栏 ============ -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#">
+      <span class="brand-dot"></span>
+      QDII Fund Scout
+    </a>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="btnRefresh" title="重新查询 (R)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"></polyline>
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+        </svg>
+      </button>
+      <button class="icon-btn" id="btnSettings" title="推送 / 定时设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        <span class="badge" id="settingsBadge" style="display:none"></span>
+      </button>
+      <button class="icon-btn" id="btnTheme" title="切换主题 (T)">
+        <svg id="themeIconLight" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+        <svg id="themeIconDark" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</header>
+
 <div class="container">
 
-<div class="head">
-  <h1>QDII FUND SCOUT</h1>
-  <div class="sub">QDII 基金申购限额查询工具 · 数据直连天天基金/证监会</div>
-</div>
+<!-- ============ 我的基金（chip 区 + 主操作）============ -->
+<section class="card card-pad">
+  <div class="card-title">
+    我的基金 <span class="meta" id="fundCountMeta"></span>
+  </div>
+  <div id="fundChips" class="fund-chips">
+    <div class="empty-tip">还未添加基金，点击下方按钮选择</div>
+  </div>
+  <div style="margin-top:10px">
+    <button class="fund-add-btn" id="btnAddFund">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      添加基金
+    </button>
+  </div>
 
-<div class="card">
-  <h3>我的基金列表</h3>
-  <div class="fund-row">
-    <select id="presetFund" onchange="onPresetChange()" style="flex:2;min-width:160px">
-      <option value="">从常见基金中选择...</option>
-      <optgroup label="纳斯达克100 指数/联接">
-      <option value="008971|大成纳斯达克100">008971 大成纳斯达克100</option>
-      <option value="160213|国泰纳斯达克100">160213 国泰纳斯达克100</option>
-      <option value="006479|广发纳斯达克100">006479 广发纳斯达克100</option>
-      <option value="014978|华安纳斯达克100">014978 华安纳斯达克100</option>
-      <option value="012870|易方达纳斯达克100">012870 易方达纳斯达克100</option>
-      <option value="015300|华夏纳斯达克100">015300 华夏纳斯达克100</option>
-      <option value="016453|南方纳斯达克100">016453 南方纳斯达克100</option>
-      <option value="018044|天弘纳斯达克100">018044 天弘纳斯达克100</option>
-      <option value="016533|嘉实纳斯达克100">016533 嘉实纳斯达克100</option>
-      <option value="016057|博时纳斯达克100">016057 博时纳斯达克100</option>
-      <option value="019548|招商纳斯达克100">019548 招商纳斯达克100</option>
-      <option value="019525|华泰柏瑞纳斯达克100">019525 华泰柏瑞纳斯达克100</option>
-      <option value="019173|摩根纳斯达克100">019173 摩根纳斯达克100</option>
-      <option value="018967|汇添富纳斯达克100">018967 汇添富纳斯达克100</option>
-      <option value="012752|建信纳斯达克100">012752 建信纳斯达克100</option>
-      <option value="019737|宝盈纳斯达克100">019737 宝盈纳斯达克100</option>
-      <option value="019442|万家纳斯达克100">019442 万家纳斯达克100</option>
-      </optgroup>
-      <optgroup label="主动管理 QDII">
-      <option value="017437|华宝纳斯达克精选">017437 华宝纳斯达克精选</option>
-      <option value="014002|浦银安盛全球智能科技">014002 浦银安盛全球智能科技</option>
-      <option value="021277|广发全球精选">021277 广发全球精选</option>
-      <option value="017731|嘉实全球产业升级">017731 嘉实全球产业升级</option>
-      <option value="000043|嘉实美国成长">000043 嘉实美国成长</option>
-      <option value="161128|易方达标普信息科技">161128 易方达标普信息科技</option>
-      <option value="012922|易方达全球成长精选">012922 易方达全球成长精选</option>
-      <option value="021842|国富全球科技">021842 国富全球科技</option>
-      <option value="539002|建信新兴市场混合">539002 建信新兴市场混合</option>
-      <option value="015202|汇添富全球移动互联">015202 汇添富全球移动互联</option>
-      <option value="024239|华夏全球科技先锋">024239 华夏全球科技先锋</option>
-      <option value="016702|银华海外数字经济">016702 银华海外数字经济</option>
-      <option value="018036|长城全球新能源车">018036 长城全球新能源车</option>
-      <option value="017145|华宝海外新能源汽车">017145 华宝海外新能源汽车</option>
-      <option value="017204|华宝海外科技">017204 华宝海外科技</option>
-      <option value="008254|华宝致远混合">008254 华宝致远混合</option>
-      <option value="017093|景顺长城纳斯达克科技">017093 景顺长城纳斯达克科技</option>
-      <option value="016665|天弘全球高端制造">016665 天弘全球高端制造</option>
-      <option value="002891|华夏移动互联">002891 华夏移动互联</option>
-      </optgroup>
-    </select>
-    <input type="text" id="manualCode" placeholder="代码" style="max-width:110px">
-    <input type="text" id="manualName" placeholder="名称" style="max-width:130px">
-    <button class="btn btn-blue" onclick="addFund()">添加</button>
-  </div>
-  <div id="fundList" class="fund-list">
-    <div class="empty-state">还未添加基金，从下拉选择或输入代码后点击添加</div>
-  </div>
-</div>
-
-<div class="card">
-  <h3>推送配置</h3>
-  <div class="push-row">
-    <label>飞书</label>
-    <input type="text" id="feishuUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
-    <button class="btn btn-outline btn-sm" onclick="testWebhook('feishu')">测试</button>
-  </div>
-  <div class="push-hint">飞书群设置 → 群机器人 → 添加 Webhook 机器人</div>
-  <div class="push-row">
-    <label>企业微信</label>
-    <input type="text" id="wechatUrl" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
-    <button class="btn btn-outline btn-sm" onclick="testWebhook('wechat')">测试</button>
-  </div>
-  <div class="push-hint">企业微信群 → 群机器人 → 添加机器人</div>
-  <div style="border-top:1px solid var(--border);margin:14px 0 10px;padding-top:10px">
-    <h3 style="margin-bottom:8px">定时推送</h3>
-    <div id="scheduleStatus" style="font-size:13px;color:var(--ink2);margin-bottom:8px"></div>
-    <div class="push-row" style="margin-bottom:6px">
-      <label style="min-width:50px">时段</label>
-      <select id="schedulePreset" onchange="onSchedulePresetChange()" style="flex:1;min-width:140px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink);padding:9px 12px;font-size:13px;font-family:inherit;outline:none">
-        <option value="">选择推送时段...</option>
-        <option value="09:00|1-5">工作日 09:00（开盘前）</option>
-        <option value="15:30|1-5">工作日 15:30（收盘后）</option>
-        <option value="09:00,15:30|1-5">工作日 09:00 + 15:30</option>
-        <option value="09:00|*">每天 09:00</option>
-        <option value="custom">自定义时间...</option>
-      </select>
+  <div class="action-area">
+    <div class="push-toggles">
+      <label class="push-toggle" id="pushFeishuLabel">
+        <input type="checkbox" id="pushFeishu">
+        推送到飞书
+      </label>
+      <label class="push-toggle" id="pushWechatLabel">
+        <input type="checkbox" id="pushWechat">
+        推送到企业微信
+      </label>
     </div>
-    <div id="customTimeRow" class="push-row" style="display:none;margin-bottom:6px">
-      <label style="min-width:50px">时间</label>
-      <input type="text" id="customTime" placeholder="如 08:30 或 08:30,16:00" style="flex:1;min-width:120px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink);padding:9px 12px;font-size:13px;font-family:inherit;outline:none">
-      <select id="customDayType" style="background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--ink);padding:9px 12px;font-size:13px;font-family:inherit;outline:none">
-        <option value="*">每天</option>
-        <option value="1-5">仅工作日</option>
-      </select>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:8px">
-      <button class="btn btn-blue btn-sm" onclick="setupSchedule()">启用定时推送</button>
-      <button class="btn btn-outline btn-sm" onclick="removeSchedule()">取消定时推送</button>
-    </div>
+    <button class="btn-primary" id="btnQuery">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      查询
+    </button>
   </div>
-  <div style="text-align:right;margin-top:6px">
-    <button class="btn btn-outline btn-sm" onclick="saveConfig()">保存配置</button>
+</section>
+
+<!-- ============ 元信息条 ============ -->
+<div class="meta-bar" id="metaBar" style="display:none">
+  <span id="freshness"></span>
+  <span class="dot">·</span>
+  <span>数据来源：天天基金 / 证监会 / yfinance</span>
+</div>
+
+<!-- ============ 加载/警告 ============ -->
+<div class="loading-bar" id="loading"><span class="spinner"></span><span id="loadingText">查询中…</span></div>
+<div class="banner warn" id="warningsBanner"></div>
+<div class="banner info" id="predHint"></div>
+
+<!-- ============ 结果表格 ============ -->
+<div class="table-wrap" id="tableWrap" style="display:none">
+  <div class="table-scroll">
+    <table class="result-table" id="resultTable">
+      <thead>
+        <tr id="theadRow"></tr>
+      </thead>
+      <tbody id="resultBody"></tbody>
+    </table>
   </div>
 </div>
+<div class="empty-result" id="emptyResult" style="display:none">查询完成，无数据返回</div>
 
-<div class="action-bar">
-  <button class="btn btn-query" onclick="runQuery(false)">查询基金数据</button>
-  <button class="btn btn-blue" onclick="runQuery('feishu')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>查询 + 推飞书</button>
-  <button class="btn btn-green" onclick="runQuery('wechat')">查询 + 推微信</button>
-</div>
-
-<div class="loading" id="loading">
-  <div class="spinner"></div>
-  <span>查询中...</span>
-</div>
-
-<div class="warnings" id="warnings"></div>
-<div id="predHint" class="pred-hint" style="display:none"></div>
-
-<div class="table-wrap">
-  <table class="result-table" id="resultTable">
-    <thead>
-      <tr>
-        <th>基金名称</th>
-        <th>代码</th>
-        <th>近1年</th>
-        <th>近1年回撤</th>
-        <th>规模(亿)</th>
-        <th>总费率</th>
-        <th>申购状态</th>
-        <th>最新涨跌</th>
-        <th>市场投资TOP3</th>
-      </tr>
-    </thead>
-    <tbody id="resultBody"></tbody>
-  </table>
-</div>
-
-<div id="emptyResult" class="empty-state" style="display:none">查询完成，无数据返回</div>
+<!-- ============ 缓存（折叠）============ -->
+<details class="card cache-card">
+  <summary>
+    <span>季报数据缓存（高级 / 诊断用，平时无需操作）</span>
+    <span style="font-size:11px;color:var(--ink4)">▼</span>
+  </summary>
+  <div class="card-pad">
+    <div style="font-size:12px;color:var(--ink3);line-height:1.7;margin-bottom:8px">
+      季报缓存日常自动跟进：每次打开本页面或定时推送启动时，后台会自动刷新 24 小时前的索引；通常无需手动操作。
+    </div>
+    <div id="cacheStats" class="cache-stats">加载中...</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn btn-outline btn-sm" onclick="cacheRefresh('refresh')">立刻刷新</button>
+      <button class="btn btn-outline btn-sm" onclick="cacheRefresh('force_refresh')">强制重新检查</button>
+      <button class="btn btn-outline btn-sm" onclick="cacheRefresh('clear_index')">清除索引</button>
+    </div>
+    <div id="cacheResult" style="margin-top:10px;font-size:12px;color:var(--ink3)"></div>
+  </div>
+</details>
 
 <div class="footer">
-  data from eastmoney / csrc / yfinance<br>
-  <span class="footer-note">仅供个人学习研究，不构成投资建议。数据版权归原始平台所有，禁止商业使用。</span>
+  仅供个人学习研究，不构成投资建议<br>
+  数据版权归原始平台所有，禁止商业使用
 </div>
 
 </div>
+
+<!-- ============ 添加基金 模态框 ============ -->
+<div class="modal-mask" id="addFundModal">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <h2>添加基金</h2>
+      <button class="icon-btn" id="addFundClose" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input type="search" id="fundSearchInput" placeholder="搜索代码 / 名称 / 拼音首字母…" autocomplete="off">
+      </div>
+      <div class="tag-row" id="tagRow"></div>
+      <div class="fund-pick-list" id="fundPickList"></div>
+
+      <div class="manual-input-row">
+        <input type="text" id="manualCode" placeholder="或手动输入 6 位基金代码" maxlength="6" pattern="\d{6}">
+        <span class="lookup-status" id="lookupStatus"></span>
+        <button class="btn btn-blue btn-sm" id="btnManualAdd">添加</button>
+      </div>
+      <div class="field-error" id="manualError"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-outline" id="addFundCancel">取消</button>
+      <button class="btn btn-blue" id="addFundConfirm" disabled>添加</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 设置抽屉 ============ -->
+<div class="drawer-mask" id="drawerMask"></div>
+<aside class="drawer" id="settingsDrawer" role="dialog" aria-modal="true">
+  <div class="drawer-head">
+    <h2>推送 & 定时设置</h2>
+    <button class="icon-btn" id="drawerClose" aria-label="关闭">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body">
+    <div class="drawer-section">
+      <h3>推送渠道</h3>
+      <div class="field">
+        <label>飞书 Webhook</label>
+        <div class="field-inline">
+          <input type="url" id="feishuUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
+          <button class="btn btn-outline btn-sm" onclick="testWebhook('feishu')">测试</button>
+        </div>
+        <div class="field-hint">飞书群 → ⋯ → 群机器人 → 添加 Webhook 机器人</div>
+      </div>
+      <div class="field">
+        <label>企业微信 Webhook</label>
+        <div class="field-inline">
+          <input type="url" id="wechatUrl" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
+          <button class="btn btn-outline btn-sm" onclick="testWebhook('wechat')">测试</button>
+        </div>
+        <div class="field-hint">企业微信群 → 群机器人 → 添加机器人</div>
+      </div>
+    </div>
+
+    <div class="drawer-section">
+      <h3>每日定时推送</h3>
+      <div class="schedule-status" id="scheduleStatus">未启用</div>
+      <div class="field">
+        <label>时段</label>
+        <select id="schedulePreset" onchange="onSchedulePresetChange()">
+          <option value="">选择推送时段...</option>
+          <option value="09:00|1-5">工作日 09:00（开盘前）</option>
+          <option value="15:30|1-5">工作日 15:30（收盘后）</option>
+          <option value="09:00,15:30|1-5">工作日 09:00 + 15:30</option>
+          <option value="09:00|*">每天 09:00</option>
+          <option value="custom">自定义时间...</option>
+        </select>
+      </div>
+      <div class="field" id="customTimeRow" style="display:none">
+        <label>自定义时间（多个用逗号分隔，如 08:30,16:00）</label>
+        <div class="field-inline">
+          <input type="text" id="customTime" placeholder="08:30 或 08:30,16:00">
+          <select id="customDayType" style="width:auto;flex-shrink:0">
+            <option value="*">每天</option>
+            <option value="1-5">仅工作日</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-blue btn-sm" onclick="setupSchedule()">启用 / 更新</button>
+        <button class="btn btn-outline btn-sm" onclick="removeSchedule()">取消定时</button>
+      </div>
+      <div class="field-hint" style="margin-top:8px">
+        Mac launchd / Linux cron 自动适配。电脑需保持开机联网。<br>
+        日志：~/.fund-scout/schedule.log
+      </div>
+    </div>
+
+    <div class="drawer-section">
+      <h3>查询行为</h3>
+      <label class="push-toggle" style="font-size:13px">
+        <input type="checkbox" id="autoRefresh">
+        每 30 分钟自动重查
+      </label>
+      <div class="field-hint" style="margin-top:4px">
+        启用后页面会定时调用查询并更新表格（不会自动推送）
+      </div>
+    </div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn btn-blue" id="drawerSave">保存配置</button>
+  </div>
+</aside>
 
 <div class="toast" id="toast"></div>
 
-<script>
-let currentFunds = [];
-
-async function api(path, body) {
-  const res = await fetch(path, {
-    method: body ? 'POST' : 'GET',
-    headers: body ? {'Content-Type': 'application/json'} : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return res.json();
-}
-
-function toast(msg, duration) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(el._timer);
-  el._timer = setTimeout(() => el.classList.remove('show'), duration || 2200);
-}
-
-function onPresetChange() {
-  const sel = document.getElementById('presetFund');
-  if (!sel.value) return;
-  const parts = sel.value.split('|');
-  document.getElementById('manualCode').value = parts[0];
-  document.getElementById('manualName').value = parts[1];
-}
-
-async function addFund() {
-  const code = document.getElementById('manualCode').value.trim();
-  const name = document.getElementById('manualName').value.trim();
-  const sel = document.getElementById('presetFund');
-  if (!code) { toast('请输入基金代码'); return; }
-  if (currentFunds.some(f => f.code === code)) { toast('该基金已在列表中'); return; }
-  currentFunds.push({code, name: name || code});
-  document.getElementById('manualCode').value = '';
-  document.getElementById('manualName').value = '';
-  sel.value = '';
-  renderFunds();
-  await saveFunds();
-}
-
-async function removeFund(index) {
-  currentFunds.splice(index, 1);
-  renderFunds();
-  await saveFunds();
-}
-
-function renderFunds() {
-  const container = document.getElementById('fundList');
-  if (currentFunds.length === 0) {
-    container.innerHTML = '<div class="empty-state">还未添加基金，从下拉选择或输入代码后点击添加</div>';
-    return;
-  }
-  container.innerHTML = currentFunds.map((f, i) =>
-    `<div class="fund-item">
-      <div>
-        <span class="code">${f.code}</span>
-        <span class="name">${f.name}</span>
-      </div>
-      <button class="remove-btn" onclick="removeFund(${i})">&times;</button>
-    </div>`
-  ).join('');
-}
-
-async function saveFunds() {
-  await api('/api/config', {my_funds: currentFunds});
-}
-
-function onSchedulePresetChange() {
-  const sel = document.getElementById('schedulePreset');
-  const customRow = document.getElementById('customTimeRow');
-  if (sel.value === 'custom') {
-    customRow.style.display = 'flex';
-  } else {
-    customRow.style.display = 'none';
-  }
-}
-
-async function setupSchedule() {
-   const sel = document.getElementById('schedulePreset');
-   let val = sel.value;
-   if (!val) { toast('请选择推送时段'); return; }
-   let times, weekdays;
-   if (val === 'custom') {
-     const timeStr = document.getElementById('customTime').value.trim();
-     weekdays = document.getElementById('customDayType').value;
-     if (!timeStr) { toast('请输入推送时间'); return; }
-     times = timeStr;
-   } else {
-     const [t, d] = val.split('|');
-     times = t;
-     weekdays = d;
-   }
-   const result = await api('/api/schedule', {action: 'setup', times, weekdays});
-   if (result.ok) toast('定时推送已启用');
-   else toast('启用失败: ' + (result.error || ''));
-   await loadScheduleStatus();
- }
-
-async function removeSchedule() {
-  const result = await api('/api/schedule', {action: 'remove'});
-  if (result.ok) toast('定时推送已取消');
-  else toast('取消失败: ' + (result.error || ''));
-  await loadScheduleStatus();
-}
-
-async function loadScheduleStatus() {
-   const data = await api('/api/schedule');
-   const el = document.getElementById('scheduleStatus');
-   if (data.active) {
-     let desc = '';
-     if (data.times && data.times.length > 0) {
-       const dayLabel = data.weekdays ? '工作日' : '每天';
-       desc = `${dayLabel} ${data.times.join(', ')}`;
-     } else if (data.cron) {
-       desc = data.cron;
-     }
-     el.innerHTML = `<span style="color:var(--green);font-weight:500">已启用</span> ${desc ? '— ' + desc : ''}`;
-   } else {
-     el.textContent = '未启用定时推送';
-   }
- }
-
-async function loadConfig() {
-  const data = await api('/api/config');
-  currentFunds = data.my_funds || [];
-  renderFunds();
-  const push = data.push || {};
-  document.getElementById('feishuUrl').value = push.feishu_webhook || '';
-  document.getElementById('wechatUrl').value = push.wechat_webhook || '';
-  await loadScheduleStatus();
-}
-
-async function saveConfig() {
-  const feishuUrl = document.getElementById('feishuUrl').value.trim();
-  const wechatUrl = document.getElementById('wechatUrl').value.trim();
-  await api('/api/config', {
-    my_funds: currentFunds,
-    push: { feishu_webhook: feishuUrl, wechat_webhook: wechatUrl }
-  });
-  toast('配置已保存');
-}
-
-async function testWebhook(type) {
-  const url = document.getElementById(type === 'feishu' ? 'feishuUrl' : 'wechatUrl').value.trim();
-  if (!url) { toast('请先输入 Webhook 地址'); return; }
-  const btn = event.target;
-  btn.textContent = '...';
-  btn.disabled = true;
-  const result = await api('/api/test-webhook', {type, url});
-  btn.textContent = '测试';
-  btn.disabled = false;
-  toast(result.ok ? (type === 'feishu' ? '飞书连接成功' : '企业微信连接成功') : (result.error || '连接失败'));
-}
-
-async function runQuery(pushTarget) {
-  const codes = currentFunds.map(f => f.code);
-  if (codes.length === 0) { toast('请先添加基金'); return; }
-  document.getElementById('loading').classList.add('active');
-  document.getElementById('resultTable').classList.remove('show');
-  document.getElementById('emptyResult').style.display = 'none';
-  document.getElementById('warnings').classList.remove('show');
-  document.getElementById('warnings').innerHTML = '';
-  const ph = document.getElementById('predHint');
-  if (ph) ph.style.display = 'none';
-  if (pushTarget) await saveConfig();
-  try {
-    const data = await api('/api/query', {codes});
-    renderResult(data);
-    if (pushTarget) {
-      document.getElementById('loading').classList.add('active');
-      document.querySelector('#loading span').textContent = '正在推送...';
-      await pushAfterQuery(pushTarget, codes);
-    }
-    document.getElementById('loading').classList.remove('active');
-  } catch (e) {
-    document.getElementById('loading').classList.remove('active');
-    toast('失败: ' + e.message);
-  }
-}
-
-function fmtReturn(val) {
-  if (val === null || val === undefined || val === '') return '-';
-  const v = typeof val === 'string' ? parseFloat(val.replace('%','')) : val;
-  if (isNaN(v)) return '-';
-  const sign = v > 0 ? '+' : '';
-  return `<span class="${v > 0 ? 'red' : (v < 0 ? 'green' : '')}">${sign}${v.toFixed(2)}%</span>`;
-}
-
-function fmtDrawdown(val) {
-  if (val === null || val === undefined || val === '') return '-';
-  const v = typeof val === 'string' ? parseFloat(val) : val;
-  if (isNaN(v)) return '-';
-  return `<span>${(v * 100).toFixed(2)}%</span>`;
-}
-
-function fmtFee(val) {
-  if (val === null || val === undefined || val === '') return '-';
-  const v = typeof val === 'string' ? parseFloat(val) : val;
-  if (isNaN(v)) return '-';
-  return v.toFixed(2) + '%';
-}
-
-function fmtStatus(info) {
-  if (!info) return '-';
-  if (info.includes('暂停')) return '<span class="status-pause">' + info + '</span>';
-  if (info.includes('限小额')) return '<span class="status-limit-small">' + info + '</span>';
-  if (info.includes('限大额')) return '<span class="status-limit-small">' + info + '</span>';
-  if (info.includes('开放')) return '<span class="status-open">' + info + '</span>';
-  return info;
-}
-
-function fmtPrediction(p) {
-  if (!p || typeof p !== 'object') return '-';
-  const val = p.value;
-  if (val === null || val === undefined) return '-';
-  const sign = val > 0 ? '+' : '';
-  const cls = val > 0 ? 'red' : (val < 0 ? 'green' : '');
-  const dateStr = p.date ? `<span style="font-size:11px;color:var(--ink2)">${p.date.slice(5)}</span> ` : '';
-  const suffix = p.is_estimate ? ' <span style="font-size:11px;color:var(--ink2)">(估算)</span>' : '';
-  return `${dateStr}<span class="${cls}">${sign}${val.toFixed(2)}%</span>${suffix}`;
-}
-
-function renderPredictionHint(funds) {
-  const el = document.getElementById('predHint');
-  if (!el) return;
-  const preds = funds.map(f => f.t1_prediction).filter(p => p && typeof p === 'object');
-  const hasEstimate = preds.some(p => p.is_estimate && p.value !== null);
-  if (hasEstimate) {
-    el.innerHTML = '⚠ 带 * 或「估算」标注的涨跌为模型预估值，仅供参考，请以基金公司公告为准';
-    el.style.display = 'block';
-  } else {
-    el.style.display = 'none';
-  }
-}
-
-function renderResult(data) {
-  document.getElementById('loading').classList.remove('active');
-  if (data.warnings && data.warnings.length > 0) {
-    const el = document.getElementById('warnings');
-    el.innerHTML = data.warnings.map(w => `<div class="warning-item">${w}</div>`).join('');
-    el.classList.add('show');
-  }
-  const funds = data.funds || [];
-  if (funds.length === 0) {
-    document.getElementById('emptyResult').style.display = 'block';
-    return;
-  }
-
-  // 显示 T-1 估算窗口提示横幅
-  renderPredictionHint(funds);
-
-  const tbody = document.getElementById('resultBody');
-  tbody.innerHTML = funds.map(f => {
-    const crossHtml = '';
-    return `<tr>
-        <td><strong>${f.name}</strong></td>
-        <td style="color:var(--accent);font-family:'JetBrains Mono',monospace">${f.code}</td>
-        <td class="num">${fmtReturn(f.return_1y)}</td>
-        <td class="num">${fmtDrawdown(f.drawdown_1y)}</td>
-        <td class="num">${f.scale || '-'}</td>
-        <td class="num">${fmtFee(f.total_fee)}</td>
-        <td>${fmtStatus(f.purchase_info || '')}</td>
-        <td class="pred-col">${fmtPrediction(f.t1_prediction)}</td>
-        <td class="market-top3">${f.market_top3 || '-'}</td>
-      </tr>`;
-  }).join('');
-  document.getElementById('resultTable').classList.add('show');
-}
-
-async function pushAfterQuery(target, codes) {
-  const res = await api('/api/push', {target, codes});
-  if (res.ok) toast('已推送到' + (target === 'feishu' ? '飞书' : '企业微信'));
-  else toast('推送失败: ' + (res.error || ''));
-}
-
-loadConfig();
-</script>
+<script src="app.js"></script>
 </body>
 </html>
