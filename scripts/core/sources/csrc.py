@@ -46,8 +46,17 @@ INDUSTRY_PATTERN = re.compile(
 COUNTRY_ALIAS = {
     "香港": "中国香港",
     "台湾": "中国台湾",
-    "中国": "中国内地",   # 部分基金披露用"中国"指代 A 股市场
+    # 注意：故意不把"中国"alias 成"中国内地"。部分 QDII 基金 PDF 用"中国"
+    # 笼统指代华人市场（含中国内地+港澳台），强行映射会污染地区代理模型。
+    # 解析后由上游决定如何处理。
 }
+
+# _simplify_name 用到的预编译正则，移到模块级避免每次调用都重建
+_NAME_CURRENCY_RE = re.compile(r'(人民币|美元|港元|美元现汇|美元现钞)')
+_NAME_TYPE_RE = re.compile(r'(混合|股票|债券|灵活配置|指数)')
+_NAME_SUFFIX_RE = re.compile(r'[ACDE]$')
+_NAME_QDII_TAG_RE = re.compile(r'\(QDII-LOF\)|\(QDII\)')
+_NAME_WS_RE = re.compile(r'\s+')
 
 
 class CSRCSource:
@@ -165,39 +174,35 @@ class CSRCSource:
         if not name:
             return []
         variations: list[str] = []
-        _CURRENCY_RE = re.compile(r'(人民币|美元|港元|美元现汇|美元现钞)')
-        _TYPE_RE = re.compile(r'(混合|股票|债券|灵活配置|指数)')
-        _SUFFIX_RE = re.compile(r'[ACDE]$')
-        _QDII_TAG_RE = re.compile(r'\(QDII-LOF\)|\(QDII\)')
 
-        base = _SUFFIX_RE.sub('', name).strip()
+        base = _NAME_SUFFIX_RE.sub('', name).strip()
         if base and base != name:
             variations.append(base)
 
-        no_currency = _CURRENCY_RE.sub('', base).strip()
+        no_currency = _NAME_CURRENCY_RE.sub('', base).strip()
         if no_currency and no_currency != name and no_currency not in variations:
             variations.append(no_currency)
 
-        no_type = _TYPE_RE.sub('', no_currency).strip()
-        no_type = re.sub(r'\s+', '', no_type)
+        no_type = _NAME_TYPE_RE.sub('', no_currency).strip()
+        no_type = _NAME_WS_RE.sub('', no_type)
         if no_type and no_type != name and no_type not in variations:
             variations.append(no_type)
 
-        no_qdii_tag = _QDII_TAG_RE.sub('', no_type).strip()
-        no_qdii_tag = re.sub(r'\s+', '', no_qdii_tag)
+        no_qdii_tag = _NAME_QDII_TAG_RE.sub('', no_type).strip()
+        no_qdii_tag = _NAME_WS_RE.sub('', no_qdii_tag)
         if no_qdii_tag and no_qdii_tag != name and no_qdii_tag not in variations:
             variations.append(no_qdii_tag)
 
-        no_qdii_from_base = _QDII_TAG_RE.sub('', base).strip()
-        no_qdii_from_base = re.sub(r'\s+', '', no_qdii_from_base)
+        no_qdii_from_base = _NAME_QDII_TAG_RE.sub('', base).strip()
+        no_qdii_from_base = _NAME_WS_RE.sub('', no_qdii_from_base)
         if no_qdii_from_base and no_qdii_from_base != name and no_qdii_from_base not in variations:
             variations.append(no_qdii_from_base)
 
-        bare = _SUFFIX_RE.sub('', name)
-        bare = _CURRENCY_RE.sub('', bare)
-        bare = _TYPE_RE.sub('', bare)
-        bare = _QDII_TAG_RE.sub('', bare)
-        bare = re.sub(r'\s+', '', bare).strip()
+        bare = _NAME_SUFFIX_RE.sub('', name)
+        bare = _NAME_CURRENCY_RE.sub('', bare)
+        bare = _NAME_TYPE_RE.sub('', bare)
+        bare = _NAME_QDII_TAG_RE.sub('', bare)
+        bare = _NAME_WS_RE.sub('', bare).strip()
         if bare and bare != name and bare not in variations:
             variations.append(bare)
 
@@ -261,62 +266,65 @@ class CSRCSource:
             logger.warning("csrc PDF 下载失败 (iid=%s): %s", instance_id, e)
             return None
 
-    def _parse_pdf_market_dist(self, pdf_bytes: bytes) -> dict:
-        result: dict = {}
+    def _extract_pdf_text(self, pdf_bytes: bytes) -> str:
+        """打开一次 PDF，返回全文拼接（含跨页表格）"""
         try:
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                # 全文拼接以防表格跨页
-                all_text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+                return "\n".join((p.extract_text() or "") for p in pdf.pages)
+        except Exception as e:
+            logger.warning("csrc PDF 文本提取失败: %s", e)
+            return ""
 
-                if "国家" not in all_text:
-                    return result
-
-                # 检查"未持有股票"标记
-                if "未持有股票" in all_text or ("未持有" in all_text and "国家" in all_text):
-                    # 双重检查：必须在国家分布段落附近出现
-                    m_section = re.search(
-                        r"5\.2[^\n]*?国家(.*?)(?=5\.3|前十名股票)",
-                        all_text, re.DOTALL,
-                    )
-                    if m_section and "未持有" in m_section.group(1):
-                        return {"_no_holdings": True}
-
-                # 仅截取 5.2 节
+    def _parse_pdf_market_dist(self, all_text: str) -> dict:
+        """从已提取的 PDF 文本解析地区分布。"""
+        result: dict = {}
+        if not all_text or "国家" not in all_text:
+            return result
+        try:
+            # 检查"未持有股票"标记
+            if "未持有股票" in all_text or ("未持有" in all_text and "国家" in all_text):
                 m_section = re.search(
                     r"5\.2[^\n]*?国家(.*?)(?=5\.3|前十名股票)",
                     all_text, re.DOTALL,
                 )
-                section_text = m_section.group(1) if m_section else all_text
+                if m_section and "未持有" in m_section.group(1):
+                    return {"_no_holdings": True}
 
-                in_section = False
-                for raw_line in section_text.split("\n"):
-                    line = raw_line.strip()
-                    if "国家" in line and ("地区" in line or "公允" in line):
-                        in_section = True
-                        continue
-                    if not in_section:
-                        continue
-                    if line.startswith("合计") or line.startswith("注") or line.startswith("小计"):
-                        in_section = False
-                        continue
-                    if "第" in line and "页" in line:
-                        continue
-                    m = COUNTRY_PATTERN.match(line)
-                    if not m:
-                        continue
-                    country = COUNTRY_ALIAS.get(m.group(1), m.group(1))
-                    pct = float(m.group(3))
-                    if country in result:
-                        result[country] = max(result[country], pct)
-                    else:
-                        result[country] = pct
+            m_section = re.search(
+                r"5\.2[^\n]*?国家(.*?)(?=5\.3|前十名股票)",
+                all_text, re.DOTALL,
+            )
+            section_text = m_section.group(1) if m_section else all_text
+
+            in_section = False
+            for raw_line in section_text.split("\n"):
+                line = raw_line.strip()
+                if "国家" in line and ("地区" in line or "公允" in line):
+                    in_section = True
+                    continue
+                if not in_section:
+                    continue
+                if line.startswith("合计") or line.startswith("注") or line.startswith("小计"):
+                    in_section = False
+                    continue
+                if "第" in line and "页" in line:
+                    continue
+                m = COUNTRY_PATTERN.match(line)
+                if not m:
+                    continue
+                country = COUNTRY_ALIAS.get(m.group(1), m.group(1))
+                pct = float(m.group(3))
+                if country in result:
+                    result[country] = max(result[country], pct)
+                else:
+                    result[country] = pct
         except Exception as e:
-            logger.warning("csrc 市场分布 PDF 解析失败: %s", e)
+            logger.warning("csrc 市场分布解析失败: %s", e)
             return {}
         return result
 
-    def _parse_pdf_fund_holdings(self, pdf_bytes: bytes) -> list[dict]:
-        """解析 FoF / QDII-LOF 的"前十名基金投资明细"
+    def _parse_pdf_fund_holdings(self, all_text: str) -> list[dict]:
+        """从已提取的 PDF 文本解析"前十名基金投资明细"
 
         识别多行表格行，比如:
             ARK
@@ -328,164 +336,152 @@ class CSRCSource:
             LLC
 
         策略：
-        1. 把所有页文本拼接（表格可能跨页）
-        2. 用包含"序号 + 公允价值 + 百分比"的锚定行作为基准
-        3. 每个 ETF 的英文名分散在锚定行前后约 6 行内，按出现顺序拼接
+        1. 用包含"序号 + 公允价值 + 百分比"的锚定行作为基准
+        2. 每个 ETF 的英文名分散在锚定行前后约 6 行内，按出现顺序拼接
         """
         result: list[dict] = []
+        if not all_text or "基金投资明细" not in all_text:
+            return []
         try:
-            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                # 拼接所有页（表格常跨页）
-                all_text = "\n".join((p.extract_text() or "") for p in pdf.pages)
+            m = re.search(
+                r"基金投资明细(.*?)(?=5\.10|5\.11|投资组合报告附注)",
+                all_text, re.DOTALL,
+            )
+            if not m:
+                return []
+            target_text = m.group(1)
 
-                if "基金投资明细" not in all_text:
-                    return []
+            lines = target_text.split("\n")
+            anchor_re = re.compile(
+                r"^\s*(\d+)\s+(.+?)\s+([\d,]+\.\d+)\s+([\d.]+)\s*$"
+            )
 
-                m = re.search(
-                    r"基金投资明细(.*?)(?=5\.10|5\.11|投资组合报告附注)",
-                    all_text, re.DOTALL,
-                )
+            # 第一遍：找出所有锚点行号
+            anchor_indices: list[tuple[int, int, str, str, float]] = []
+            for idx, line in enumerate(lines):
+                m = anchor_re.match(line.strip())
                 if not m:
-                    return []
-                target_text = m.group(1)
+                    continue
+                seq = int(m.group(1))
+                if seq < 1 or seq > 10:
+                    continue
+                pct = float(m.group(4))
+                if pct < 0.1 or pct > 50:
+                    continue
+                anchor_indices.append((idx, seq, m.group(2), m.group(3), pct))
 
-                lines = target_text.split("\n")
-                anchor_re = re.compile(
-                    r"^\s*(\d+)\s+(.+?)\s+([\d,]+\.\d+)\s+([\d.]+)\s*$"
-                )
+            # 锚点之间的窗口边界
+            for i, (idx, seq, middle, value_str, pct) in enumerate(anchor_indices):
+                # 上界：上一个锚点之后 / 文本起点
+                upper = anchor_indices[i - 1][0] + 1 if i > 0 else 0
+                # 下界：下一个锚点之前 / 文本终点（且最多向前 4 行，避免跨条目串）
+                if i + 1 < len(anchor_indices):
+                    lower = anchor_indices[i + 1][0]
+                else:
+                    lower = min(len(lines), idx + 5)
+                window = lines[upper:lower]
 
-                # 第一遍：找出所有锚点行号
-                anchor_indices: list[tuple[int, int, str, str, float]] = []
-                for idx, line in enumerate(lines):
-                    m = anchor_re.match(line.strip())
-                    if not m:
+                candidates: list[str] = []
+                if re.search(r"[A-Za-z]", middle):
+                    candidates.append(middle.strip())
+                for w in window:
+                    wl = w.strip()
+                    if not wl or wl == lines[idx].strip():
                         continue
-                    seq = int(m.group(1))
-                    if seq < 1 or seq > 10:
+                    if any(skip in wl for skip in ("序号", "基金名称", "比例", "占基金", "基金类")):
                         continue
-                    pct = float(m.group(4))
-                    if pct < 0.1 or pct > 50:
+                    ascii_tokens = re.findall(
+                        r"[A-Za-z][A-Za-z0-9&\.\-/\s]*[A-Za-z0-9\)]", wl
+                    )
+                    for tok in ascii_tokens:
+                        tok = re.sub(r"\s+", " ", tok).strip()
+                        # 排除显著的"管理人"标记
+                        if any(co in tok for co in (
+                            " LLC", " Inc", " Inc.", " Corp", " Advisors",
+                            " Capital Management", "Fund Advisors",
+                            "BlackRock", "Invesco Capital", "State Street",
+                            "Van Eck Associates", "ProShares Capital",
+                            "ARK Investment Management",
+                            "Global X Management", "SSgA Funds Management",
+                            "Citibank",
+                        )):
+                            continue
+                        candidates.append(tok)
+
+                seen = set()
+                parts = []
+                for c in candidates:
+                    c2 = re.sub(r"\s+", " ", c).strip()
+                    if not c2 or len(c2) < 2:
                         continue
-                    anchor_indices.append((idx, seq, m.group(2), m.group(3), pct))
-
-                # 锚点之间的窗口边界
-                for i, (idx, seq, middle, value_str, pct) in enumerate(anchor_indices):
-                    # 上界：上一个锚点之后 / 文本起点
-                    upper = anchor_indices[i - 1][0] + 1 if i > 0 else 0
-                    # 下界：下一个锚点之前 / 文本终点（且最多向前 4 行，避免跨条目串）
-                    if i + 1 < len(anchor_indices):
-                        lower = anchor_indices[i + 1][0]
-                    else:
-                        lower = min(len(lines), idx + 5)
-                    window = lines[upper:lower]
-
-                    candidates: list[str] = []
-                    if re.search(r"[A-Za-z]", middle):
-                        candidates.append(middle.strip())
-                    for w in window:
-                        wl = w.strip()
-                        if not wl or wl == lines[idx].strip():
-                            continue
-                        if any(skip in wl for skip in ("序号", "基金名称", "比例", "占基金", "基金类")):
-                            continue
-                        ascii_tokens = re.findall(
-                            r"[A-Za-z][A-Za-z0-9&\.\-/\s]*[A-Za-z0-9\)]", wl
-                        )
-                        for tok in ascii_tokens:
-                            tok = re.sub(r"\s+", " ", tok).strip()
-                            # 排除显著的"管理人"标记
-                            if any(co in tok for co in (
-                                " LLC", " Inc", " Inc.", " Corp", " Advisors",
-                                " Capital Management", "Fund Advisors",
-                                "BlackRock", "Invesco Capital", "State Street",
-                                "Van Eck Associates", "ProShares Capital",
-                                "ARK Investment Management",
-                                "Global X Management", "SSgA Funds Management",
-                                "Citibank",
-                            )):
-                                continue
-                            candidates.append(tok)
-
-                    seen = set()
-                    parts = []
-                    for c in candidates:
-                        c2 = re.sub(r"\s+", " ", c).strip()
-                        if not c2 or len(c2) < 2:
-                            continue
-                        if len(c2) <= 2 and c2.upper() not in ("X", "AI"):
-                            continue
-                        if c2 in seen:
-                            continue
-                        seen.add(c2)
-                        parts.append(c2)
-                    full_name = " ".join(parts)
-                    full_name = re.sub(r"^\d+\s*", "", full_name).strip()
-                    full_name = self._normalize_etf_name(full_name)
-
-                    result.append({
-                        "seq": seq,
-                        "name": full_name,
-                        "pct": pct,
-                        "value": value_str,
-                    })
-
-                # 按 seq 去重并排序
-                seen_seq = set()
-                uniq = []
-                for r in result:
-                    if r["seq"] in seen_seq:
+                    if len(c2) <= 2 and c2.upper() not in ("X", "AI"):
                         continue
-                    seen_seq.add(r["seq"])
-                    uniq.append(r)
-                uniq.sort(key=lambda x: x["seq"])
-                return uniq
+                    if c2 in seen:
+                        continue
+                    seen.add(c2)
+                    parts.append(c2)
+                full_name = " ".join(parts)
+                full_name = re.sub(r"^\d+\s*", "", full_name).strip()
+                full_name = self._normalize_etf_name(full_name)
+
+                result.append({
+                    "seq": seq,
+                    "name": full_name,
+                    "pct": pct,
+                    "value": value_str,
+                })
+
+            # 按 seq 去重并排序
+            seen_seq = set()
+            uniq = []
+            for r in result:
+                if r["seq"] in seen_seq:
+                    continue
+                seen_seq.add(r["seq"])
+                uniq.append(r)
+            uniq.sort(key=lambda x: x["seq"])
+            return uniq
         except Exception as e:
-            logger.warning("csrc 基金投资明细 PDF 解析失败: %s", e)
+            logger.warning("csrc 基金投资明细解析失败: %s", e)
             return []
 
-    def _parse_pdf_industry_dist(self, pdf_bytes: bytes) -> dict:
+    def _parse_pdf_industry_dist(self, all_text: str) -> dict:
+        """从已提取的 PDF 文本解析行业分布。"""
         result: dict = {}
+        if not all_text or "行业" not in all_text:
+            return result
         try:
-            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                # 全文拼接（行业表常常跨页）
-                all_text = "\n".join(
-                    (p.extract_text() or "") for p in pdf.pages
-                )
-                if "行业" not in all_text:
-                    return result
-                # 仅截取 5.3 节，避免误抓其他表
-                m = re.search(
-                    r"5\.3[^\n]*?行业(.*?)(?=5\.4|前十名股票)",
-                    all_text, re.DOTALL,
-                )
-                section_text = m.group(1) if m else all_text
+            # 仅截取 5.3 节，避免误抓其他表
+            m = re.search(
+                r"5\.3[^\n]*?行业(.*?)(?=5\.4|前十名股票)",
+                all_text, re.DOTALL,
+            )
+            section_text = m.group(1) if m else all_text
 
-                in_section = False
-                for raw_line in section_text.split("\n"):
-                    line = raw_line.strip()
-                    if "行业" in line and ("分类" in line or "公允" in line or "类别" in line):
-                        in_section = True
-                        continue
-                    if not in_section:
-                        continue
-                    if line.startswith("合计") or line.startswith("注") or line.startswith("小计"):
-                        # 一个表结束，但可能还有续表（如 5.3.1）
-                        in_section = False
-                        continue
-                    # 跳过页眉/页脚（"第 X 页"、基金简称重复等）
-                    if "第" in line and "页" in line:
-                        continue
-                    m_match = INDUSTRY_PATTERN.match(line)
-                    if not m_match:
-                        continue
-                    industry = m_match.group(1).strip()
-                    # 去掉 GICS 数字前缀（如 "45 信息技术" -> "信息技术"）
-                    industry = re.sub(r'^[A-Z]?\d{0,2}\s+', '', industry).strip()
-                    pct = float(m_match.group(2))
-                    if industry in result:
-                        result[industry] = max(result[industry], pct)
-                    else:
-                        result[industry] = pct
+            in_section = False
+            for raw_line in section_text.split("\n"):
+                line = raw_line.strip()
+                if "行业" in line and ("分类" in line or "公允" in line or "类别" in line):
+                    in_section = True
+                    continue
+                if not in_section:
+                    continue
+                if line.startswith("合计") or line.startswith("注") or line.startswith("小计"):
+                    in_section = False
+                    continue
+                if "第" in line and "页" in line:
+                    continue
+                m_match = INDUSTRY_PATTERN.match(line)
+                if not m_match:
+                    continue
+                industry = m_match.group(1).strip()
+                # 去掉 GICS 数字前缀（如 "45 信息技术" -> "信息技术"）
+                industry = re.sub(r'^[A-Z]?\d{0,2}\s+', '', industry).strip()
+                pct = float(m_match.group(2))
+                if industry in result:
+                    result[industry] = max(result[industry], pct)
+                else:
+                    result[industry] = pct
         except Exception as e:
             logger.warning("csrc 行业分布 PDF 解析失败: %s", e)
             return {}
@@ -561,9 +557,22 @@ class CSRCSource:
                 "from_cache": False,
             }
 
-        market_raw = self._parse_pdf_market_dist(pdf_bytes)
-        industry_raw = self._parse_pdf_industry_dist(pdf_bytes)
-        fund_holdings = self._parse_pdf_fund_holdings(pdf_bytes)
+        # 一次 pdfplumber.open 拿到全文，三个解析函数共享文本（性能关键）
+        all_text = self._extract_pdf_text(pdf_bytes)
+        if not all_text:
+            return {
+                "instance_id": instance_id,
+                "report_name": report_name,
+                "report_quarter": report_quarter,
+                "market_dist": {"_inferred": True, "_note": "pdf_text_extract_failed"},
+                "industry_dist": {"_inferred": True, "_note": "pdf_text_extract_failed"},
+                "fund_holdings": [],
+                "from_cache": False,
+            }
+
+        market_raw = self._parse_pdf_market_dist(all_text)
+        industry_raw = self._parse_pdf_industry_dist(all_text)
+        fund_holdings = self._parse_pdf_fund_holdings(all_text)
 
         # 拼成对外标准结构
         market_total = round(sum(v for k, v in market_raw.items() if not k.startswith("_")), 2)
@@ -616,26 +625,3 @@ class CSRCSource:
     def fetch_fund_holdings(self, main_code: str, short_name: str = "") -> list[dict]:
         """对于 FoF/QDII-LOF/ETF联接 类基金，从 CSRC PDF 解析"前十名基金投资明细" """
         return self.fetch_exposure(main_code, short_name).get("fund_holdings", [])
-
-    # 保留旧实现作为内部细粒度接口（已废弃，新代码请用 fetch_exposure）
-    def _fetch_market_distribution_legacy(self, main_code: str, short_name: str = "") -> dict:
-        rec = self.search_report(main_code, short_name)
-        if not rec:
-            return {"_source": self._source_tag(), "_total_pct": 0, "_inferred": True, "_note": "not_found"}
-
-        instance_id = str(rec.get("uploadInfoId", ""))
-        pdf_bytes = self._download_pdf(instance_id)
-        if not pdf_bytes:
-            return {"_source": self._source_tag(rec), "_total_pct": 0, "_inferred": True, "_note": "pdf_download_failed", "_instance_id": instance_id}
-
-        dist = self._parse_pdf_market_dist(pdf_bytes)
-        total = round(sum(dist.values()), 2) if dist else 0
-
-        time.sleep(random.uniform(0.1, 0.3))
-
-        if dist.get("_no_holdings"):
-            return {"_source": self._source_tag(rec), "_total_pct": 0, "_inferred": True, "_note": "no_holdings", "_instance_id": instance_id}
-        non_meta = {k: v for k, v in dist.items() if not k.startswith("_")}
-        if non_meta:
-            return {**dist, "_source": self._source_tag(rec), "_total_pct": total, "_inferred": False, "_instance_id": instance_id}
-        return {"_source": self._source_tag(rec), "_total_pct": 0, "_inferred": True, "_note": "no_table", "_instance_id": instance_id}

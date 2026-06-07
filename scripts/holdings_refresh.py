@@ -48,8 +48,10 @@ from core.sources.csrc import CSRCSource
 from core.sources.csrc_cache import CSRCCache
 
 
-# 18 只基金的 (C 代码, 主代码, 简称) - 与 run_backtest.py 一致
-# 主代码通过 fundcode_search.js 反查验证过
+# 默认基金列表：仅作为 fallback 示例使用（用户没有配置文件 / 未传 --funds 时）。
+# 生产用法应通过 ~/.fund-scout/config.json 自定义关注的基金。
+# 此清单不代表"全部 QDII"，新基金或未列入的请在配置文件中明确添加。
+# (C 代码, 主代码 / A 代码, 简称) - 主代码通过 fundcode_search.js 反查
 DEFAULT_FUNDS = [
     ("017437", "017436", "华宝纳斯达克精选"),
     ("014002", "014002", "浦银安盛全球智能科技"),
@@ -234,6 +236,61 @@ def cmd_clear(only_index: bool = False) -> None:
             print(f"已彻底清除缓存目录: {cache.cache_dir}")
         else:
             print(f"缓存目录不存在: {cache.cache_dir}")
+
+
+def refresh_stale_in_background(funds: list[tuple[str, str, str]] | None = None,
+                                 stale_threshold_hours: int = 24) -> None:
+    """在后台静默刷新 stale 的基金索引（用于 UI / run.sh 启动时预热）。
+
+    与 cmd_refresh 的区别：
+    - 不打印输出，不阻塞主流程
+    - 只刷新 stale (索引过期或缺失) 的基金
+    - 异常完全静默
+    - 用 daemon 线程，主进程退出时跟着退出
+
+    使用场景：用户打开 UI / 进入 run.sh 菜单时调用一次，无感跟进新季报。
+    """
+    import threading
+    import time as _time
+    import logging as _logging
+
+    def _worker():
+        try:
+            cache = CSRCCache()
+            now = _time.time()
+            stale_threshold = stale_threshold_hours * 3600
+
+            target_funds = funds or load_user_funds()
+            stale_targets = []
+            for code, main_code, short_name in target_funds:
+                idx_path = cache._index_path(main_code)
+                # 缺失或超过阈值都算 stale
+                if not os.path.exists(idx_path):
+                    stale_targets.append((code, main_code, short_name))
+                    continue
+                try:
+                    age = now - os.path.getmtime(idx_path)
+                    if age > stale_threshold:
+                        stale_targets.append((code, main_code, short_name))
+                except OSError:
+                    stale_targets.append((code, main_code, short_name))
+
+            if not stale_targets:
+                return
+
+            csrc = CSRCSource(target_quarter="auto", cache=cache)
+            for code, main_code, short_name in stale_targets:
+                try:
+                    csrc.fetch_exposure(main_code, short_name)
+                except Exception as e:
+                    _logging.getLogger(__name__).debug(
+                        "后台刷新 %s 失败: %s", code, e
+                    )
+        except Exception as e:
+            _logging.getLogger(__name__).debug("后台刷新整体异常: %s", e)
+
+    t = threading.Thread(target=_worker, daemon=True, name="csrc-refresh")
+    t.start()
 
 
 def main():

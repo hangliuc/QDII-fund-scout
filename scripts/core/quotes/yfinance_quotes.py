@@ -319,10 +319,20 @@ class QuoteSource:
         if use_cache:
             cached = self._load_cache(ticker)
             if cached is not None:
-                # 检查覆盖区间是否够（注意：ticker 时区可能让 start/end 在缓存范围外略微浮动）
+                # 缓存命中判定：
+                # - cstart 必须 <= start
+                # - cend >= 期望结束（end 限到今天）
+                # - 容差 4 天：覆盖周末 + 美股节假日（缓存里看不到这些非交易日）
+                #   _load_cache 已经检查 mtime <= max_age_days 保证不会过陈旧
                 cstart = cached.index.min().date().isoformat() if len(cached) else "9999-01-01"
                 cend = cached.index.max().date().isoformat() if len(cached) else "0000-01-01"
-                if cstart <= start and cend >= end:
+                today_iso = datetime.now().date().isoformat()
+                effective_end = min(end, today_iso)
+                # cend + 4 天 >= effective_end 就接受（容许周末/节假日间隙）
+                cend_dt = datetime.fromisoformat(cend).date()
+                eff_dt = datetime.fromisoformat(effective_end).date()
+                cend_with_grace = (cend_dt + timedelta(days=4)).isoformat()
+                if cstart <= start and cend_with_grace >= effective_end:
                     mask = (cached.index >= pd.Timestamp(start)) & (cached.index <= pd.Timestamp(end))
                     return cached.loc[mask].copy()
 

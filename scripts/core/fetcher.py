@@ -11,6 +11,7 @@ from core.models import FundInfo, FundDataResult
 from core.validate import validate_data
 from core.sources.base import SourceError
 from core.sources.eastmoney import EastMoneySource
+from core.sources.eastmoney_bulk import BulkSnapshot
 from core.sources.csrc import CSRCSource
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,20 @@ def _semantic_purchase_match(s1: str, l1: str, s2: str, l2: str) -> bool:
 
 
 class FundFetcher:
+    """基金数据获取调度器。
+
+    主路径：BulkSnapshot 全市场快照（2 次 HTTP 拉 2.6 万只）→ 命中即毫秒级返回 FundInfo
+    补充：scale / 费率 / 回撤 通过档案页 + NAV API 并行拿（每只 ~1s）
+    降级：BulkSnapshot 不命中 / 全部失败时，逐只走 HTML 详情页
+
+    BulkSnapshot 在进程内单例缓存（10 分钟 TTL），UI / cron 使用同一份内存数据。
+    """
+
     _MAX_FAIL = 30
+
+    # 进程级共享 BulkSnapshot，避免每次 new FundFetcher 都重新拉全市场
+    _shared_bulk: BulkSnapshot | None = None
+    _shared_bulk_lock = threading.Lock()
 
     def __init__(self, rate_limit: float = 1.0):
         self.rate_limit = max(rate_limit, MIN_RATE_LIMIT)
@@ -86,6 +100,23 @@ class FundFetcher:
         self._csrc = CSRCSource(rate_limit=self.rate_limit)
         self._fail_count = 0
         self._lock = threading.Lock()
+        # 不在 __init__ 触发 BulkSnapshot.load，留给第一次实际查询时按需拉
+
+    @classmethod
+    def _get_bulk(cls) -> BulkSnapshot:
+        """获取进程级共享 BulkSnapshot 实例（线程安全的 lazy init）"""
+        with cls._shared_bulk_lock:
+            if cls._shared_bulk is None:
+                cls._shared_bulk = BulkSnapshot()
+            return cls._shared_bulk
+
+    @classmethod
+    def warm_up(cls) -> None:
+        """预热全市场快照（在后台线程中调用，避免首次查询时阻塞）"""
+        try:
+            cls._get_bulk().load()
+        except Exception as e:
+            logger.warning("BulkSnapshot 预热失败（非致命）: %s", e)
 
     def _sleep(self) -> None:
         time.sleep(self.rate_limit)
@@ -109,15 +140,28 @@ class FundFetcher:
             raise RuntimeError(f"连续 {self._MAX_FAIL} 次失败，自动停止")
 
     def _fetch_with_fallback(self, code: str) -> FundInfo:
+        """单只基金抓取，BulkSnapshot 优先，失败降级到 HTML 详情页"""
+        # 主路径：全市场快照
+        try:
+            bulk = self._get_bulk()
+            info = bulk.get_fund(code)
+            if not info.data_unavailable:
+                self._record_success()
+                return info
+            logger.debug("BulkSnapshot 不含 %s，降级到 HTML 详情页", code)
+        except Exception as e:
+            logger.warning("BulkSnapshot 获取 %s 异常: %s，降级", code, e)
+
+        # 降级：HTML 详情页（慢但全字段）
         try:
             info = self._primary.fetch_detail(code)
             self._record_success()
             return info
         except SourceError as e:
-            logger.warning("天天基金获取 %s 失败: %s", code, e)
+            logger.warning("天天基金 HTML 获取 %s 失败: %s", code, e)
             self._record_fail()
         except Exception as e:
-            logger.warning("天天基金获取 %s 异常: %s", code, e)
+            logger.warning("天天基金 HTML 获取 %s 异常: %s", code, e)
             self._record_fail()
 
         logger.error("无法获取基金 %s，返回降级结果", code)
@@ -160,7 +204,14 @@ class FundFetcher:
         if info.data_unavailable:
             return info
 
-        if cross_validate and info.data_source == "eastmoney":
+        # BulkSnapshot 路径需要补充 scale / 费率 / 回撤
+        if info.data_source == "eastmoney_bulk":
+            try:
+                BulkSnapshot.enrich_fund(info)
+            except Exception as e:
+                logger.warning("enrich %s 失败: %s", code, e)
+
+        if cross_validate and info.data_source in ("eastmoney", "eastmoney_bulk"):
             info = self._cross_validate_fund(info)
 
         info._purchase_info = _build_purchase_info(
@@ -194,22 +245,59 @@ class FundFetcher:
         return info
 
     def _fetch_batch_parallel(self, codes: list[str]) -> list[FundInfo]:
+        """批量获取基金。
+
+        策略：
+        1. 先 BulkSnapshot 一次拿到所有基金的核心字段（限购 / 净值 / 收益率）
+        2. 并行 enrich（scale / 费率 / 回撤）
+        3. 快照不命中的基金降级到 HTML 详情页
+        """
         if not codes:
             return []
-        if len(codes) == 1:
-            return [self._fetch_with_fallback(codes[0])]
-        results: list[FundInfo] = []
-        with ThreadPoolExecutor(max_workers=min(len(codes), 4)) as ex:
-            fut_to_code = {ex.submit(self._fetch_with_fallback, code): code for code in codes}
-            for fut in as_completed(fut_to_code):
-                try:
-                    info = fut.result()
-                    results.append(info)
-                except Exception:
-                    results.append(FundInfo(code=fut_to_code[fut], data_source="unavailable", data_unavailable=True))
-        code_order = {code: i for i, code in enumerate(codes)}
-        results.sort(key=lambda f: code_order.get(f.code, 999))
+
+        # 第 1 步：批量从 BulkSnapshot 获取（首次会触发 2 次 HTTP 拉全市场）
+        try:
+            results = self._get_bulk().get_batch(codes)
+            self._record_success()
+        except Exception as e:
+            logger.warning("BulkSnapshot 批量失败 (%s)，全部降级到 HTML 详情页", e)
+            results = [FundInfo(code=c, data_source="unavailable", data_unavailable=True) for c in codes]
+
+        # 第 2 步：快照不命中的基金降级到 HTML 详情页
+        missing_idx = [(i, f.code) for i, f in enumerate(results) if f.data_unavailable]
+        if missing_idx:
+            with ThreadPoolExecutor(max_workers=min(len(missing_idx), 4)) as ex:
+                fut_to_idx = {
+                    ex.submit(self._html_fallback, code): i
+                    for i, code in missing_idx
+                }
+                for fut in as_completed(fut_to_idx):
+                    idx = fut_to_idx[fut]
+                    try:
+                        results[idx] = fut.result()
+                    except Exception as e:
+                        logger.warning("HTML 降级 %s 失败: %s", codes[idx], e)
+
+        # 第 3 步：并行 enrich scale / 费率 / 回撤（每只基金 ~1s，并行后总 ~1-2s）
+        enrich_targets = [f for f in results if not f.data_unavailable]
+        if enrich_targets:
+            with ThreadPoolExecutor(max_workers=min(len(enrich_targets), 6)) as ex:
+                futs = {ex.submit(BulkSnapshot.enrich_fund, f): f for f in enrich_targets}
+                for fut in as_completed(futs):
+                    try:
+                        fut.result(timeout=15)
+                    except Exception:
+                        pass
+
         return results
+
+    def _html_fallback(self, code: str) -> FundInfo:
+        """HTML 详情页降级路径"""
+        try:
+            return self._primary.fetch_detail(code)
+        except (SourceError, Exception) as e:
+            logger.warning("HTML 详情页 %s 失败: %s", code, e)
+            return FundInfo(code=code, data_source="unavailable", data_unavailable=True)
 
     def compare(self, codes: list[str] | None = None, keyword: str = "", fund_type: str = "",
                 cross_validate: bool = True, include_csrc: bool = True,
@@ -225,7 +313,7 @@ class FundFetcher:
 
         if codes:
             fund_list = self._fetch_batch_parallel(codes)
-            need_cv = [f for f in fund_list if f.data_source == "eastmoney" and not f.data_unavailable] if cross_validate else []
+            need_cv = [f for f in fund_list if f.data_source in ("eastmoney", "eastmoney_bulk") and not f.data_unavailable] if cross_validate else []
             csrc_funds = [f for f in fund_list if not f.data_unavailable] if include_csrc else []
 
             if need_cv or csrc_funds:
@@ -301,9 +389,12 @@ class FundFetcher:
         return self._validate_and_build_result(fund_list, profile="compare")
 
     def _enrich_with_t1_prediction(self, fund_list: list[FundInfo]) -> None:
-        """并行为每只 QDII 基金计算最新涨跌（真值或估算）。"""
+        """并行为每只 QDII 基金计算最新涨跌（真值或估算）。
+
+        优化：调用批量预测，所有基金共享一次 fetch_prices（ETF 池高度重叠）。
+        """
         try:
-            from core.predict_inline import predict_t1_for_fund
+            from core.predict_inline import predict_t1_batch
         except ImportError as e:
             logger.warning("预测模块不可用: %s", e)
             return
@@ -320,23 +411,17 @@ class FundFetcher:
         if not targets:
             return
 
-        with ThreadPoolExecutor(max_workers=min(len(targets), 4)) as ex:
-            fut_map = {}
-            for f in targets:
-                fut = ex.submit(
-                    predict_t1_for_fund,
-                    f.code,
-                    f.code,
-                    f.short_name or f.name,
-                )
-                fut_map[fut] = f
-            for fut in as_completed(fut_map):
-                f = fut_map[fut]
-                try:
-                    f._t1_prediction = fut.result(timeout=30)
-                except Exception as e:
-                    logger.warning("基金 %s 预测失败: %s", f.code, e)
-                    f._t1_prediction = {}
+        try:
+            result_map = predict_t1_batch([
+                {"code": f.code, "main_code": f.code, "short_name": f.short_name or f.name}
+                for f in targets
+            ])
+        except Exception as e:
+            logger.warning("批量预测失败: %s", e)
+            return
+
+        for f in targets:
+            f._t1_prediction = result_map.get(f.code, {})
 
     def market_distribution(self, code: str, main_code: str = "", short_name: str = "") -> dict:
         self._check_fail()
@@ -399,7 +484,7 @@ class FundFetcher:
         if val is None:
             return None
         try:
-            return float(str(val).replace("%", "").replace(",", "").strip()) or None
+            return float(str(val).replace("%", "").replace(",", "").strip())
         except (ValueError, TypeError):
             return None
 

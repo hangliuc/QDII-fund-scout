@@ -19,9 +19,12 @@ class FundInfo:
     name: str = ""
     short_name: str = ""
     type: str = ""
+    risk: str = ""
     benchmark: str = ""
     nav: float | None = None
     nav_date: str = ""
+    nav_list: list[dict] = field(default_factory=list)
+    update_date: str = ""
     scale: float | None = None
     mgmt_fee: float | None = None
     custody_fee: float | None = None
@@ -35,6 +38,7 @@ class FundInfo:
     return_3y: float | None = None
     return_ytd: float | None = None
     return_since_inception: float | None = None
+    return_sl: float | None = None  # 成立以来收益率（eastmoney 主页字段）
     purchase_status: str = ""
     purchase_limit: str = ""
     effectively_closed: bool = False
@@ -51,19 +55,22 @@ class FundInfo:
     tracking_error: float | None = None
     data_source: str = ""
     data_unavailable: bool = False
+    market_top3: str = ""
+    # 内部字段（以下划线开头），to_dict 默认过滤
     _cross_validation: list[dict] = field(default_factory=list)
     _cross_resolved: list[dict] = field(default_factory=list)
     _cross_validated: list[dict] = field(default_factory=list)
     _nav_return_1y: float | None = None
-    market_top3: str = ""
     _purchase_info: str = ""
     _t1_prediction: dict = field(default_factory=dict)  # T-1 估值预测结果（详见 predict_inline.predict_t1_for_fund）
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
-        d["purchase_info"] = self._purchase_info
-        d["t1_prediction"] = self._t1_prediction
-        return d
+        # 过滤所有以下划线开头的内部字段，再以可读名称重新暴露
+        out = {k: v for k, v in d.items() if not k.startswith("_")}
+        out["purchase_info"] = self._purchase_info
+        out["t1_prediction"] = self._t1_prediction
+        return out
 
 
 @dataclass

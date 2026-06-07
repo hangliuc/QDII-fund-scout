@@ -7,7 +7,6 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Optional
 
 import requests
 
@@ -33,11 +32,6 @@ _MANAGER_URL = "http://fundf10.eastmoney.com/jjjl_{code}.html"
 _HOLDING_URL = (
     "http://fundf10.eastmoney.com/FundArchivesDatas.aspx"
     "?type=jjcc&code={code}&topline=10&year={year}&month=&rt=0.1"
-)
-_NAV_URL = (
-    "https://api.fund.eastmoney.com/f10/lsjz"
-    "?callback=jQuery&fundCode={code}&pageIndex={page}"
-    "&pageSize=20&startDate={start}&endDate={end}"
 )
 _FUND_CODES_URL = "http://fund.eastmoney.com/js/fundcode_search.js"
 
@@ -79,25 +73,29 @@ class EastMoneySource(BaseSource):
         today = datetime.now().strftime("%Y-%m-%d")
         start = (datetime.now().replace(year=datetime.now().year - 1)).strftime("%Y-%m-%d")
 
-        # 13 页 = 260 条，覆盖 1 年交易日（~250），一次性并行拉取
+        # 主页 + 档案 + 经理页 三路并行
         urls = [
             _FUND_URL.format(code=code),
             _ARCHIVE_URL.format(code=code),
             _MANAGER_URL.format(code=code),
-        ] + [
-            _NAV_URL.format(code=code, page=p, start=start, end=today)
-            for p in range(1, 14)
         ]
 
         results: list[tuple[str, str | None]] = []
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            fut = {ex.submit(self._get_with_retry, u): u for u in urls}
-            for f in as_completed(fut):
-                url = fut[f]
+        # NAV 历史与三个 HTML 页同时抓（NAV 走公共模块，多页内部串行）
+        from core.sources.eastmoney_nav import fetch_nav_pages
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            html_futs = {ex.submit(self._get_with_retry, u): u for u in urls}
+            nav_fut = ex.submit(fetch_nav_pages, code, start, today, 14)
+            for f in as_completed(html_futs):
+                url = html_futs[f]
                 try:
                     results.append((url, f.result()))
                 except Exception:
                     results.append((url, None))
+            try:
+                nav_rows = nav_fut.result()
+            except Exception:
+                nav_rows = []
 
         html_pool = dict(results)
 
@@ -129,38 +127,12 @@ class EastMoneySource(BaseSource):
             except Exception as e:
                 logger.warning("eastmoney _parse_manager_page(%s) 部分解析失败: %s", code, e)
 
-        all_navs: list[tuple[str, float]] = []
-        all_changes: list[tuple[str, float]] = []
-        for nav_url in urls[3:]:
-            nav_html = html_pool.get(nav_url)
-            if not nav_html:
-                continue
-            try:
-                clean = nav_html.strip()
-                if clean.startswith("jQuery(") and clean.endswith(")"):
-                    clean = clean[7:-1]
-                data = json.loads(clean)
-                items = (data.get("Data", {}) or {}).get("LSJZList", [])
-                for item in items:
-                    try:
-                        nav_val = float(item.get("DWJZ", "0"))
-                        date_val = item.get("FSRQ", "")
-                        if nav_val > 0 and date_val:
-                            all_navs.append((date_val, nav_val))
-                        jz_str = item.get("JZZZL", "")
-                        if jz_str and jz_str not in ("", "None"):
-                            all_changes.append((date_val, float(jz_str)))
-                    except (ValueError, TypeError):
-                        continue
-            except Exception:
-                pass
-
-        if all_navs:
-            all_navs.sort(key=lambda x: x[0])
-            info.nav_list = [{"date": d, "nav": n} for d, n in all_navs]
-            info.drawdown_1y = self._calc_drawdown(all_navs, start)
+        if nav_rows:
+            info.nav_list = [{"date": r["date"], "nav": r["nav"]} for r in nav_rows]
+            from core.sources.eastmoney_nav import calc_max_drawdown, calc_period_return
+            info.drawdown_1y = calc_max_drawdown(nav_rows, since=start)
             # 从 NAV 数据独立计算近1年收益率，用于交叉验证
-            info._nav_return_1y = self._calc_return_from_nav(all_navs, start)
+            info._nav_return_1y = calc_period_return(nav_rows, since=start)
 
         info.update_date = time.strftime("%Y-%m-%d")
         return info
@@ -388,32 +360,6 @@ class EastMoneySource(BaseSource):
             return result
 
         return result
-
-    @staticmethod
-    def _calc_drawdown(nav_list: list[tuple[str, float]], since: str) -> Optional[float]:
-        filtered = [(d, n) for d, n in nav_list if d >= since]
-        if not filtered:
-            return None
-        peak = filtered[0][1]
-        max_dd = 0.0
-        for _, nav in filtered:
-            if nav > peak:
-                peak = nav
-            dd = (peak - nav) / peak
-            if dd > max_dd:
-                max_dd = dd
-        return round(max_dd, 6)
-
-    @staticmethod
-    def _calc_return_from_nav(nav_list: list[tuple[str, float]], since: str) -> Optional[float]:
-        filtered = [(d, n) for d, n in nav_list if d >= since]
-        if len(filtered) < 2:
-            return None
-        start_nav = filtered[0][1]
-        end_nav = filtered[-1][1]
-        if start_nav <= 0:
-            return None
-        return round((end_nav - start_nav) / start_nav * 100, 4)
 
     def _fetch_holdings(self, code: str, year: int) -> list[dict]:
         text = self._get_with_retry(_HOLDING_URL.format(code=code, year=year))

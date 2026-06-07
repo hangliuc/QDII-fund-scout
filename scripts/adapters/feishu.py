@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 from adapters import BaseAdapter, register
+from adapters._format import to_float, fmt_return, format_prediction_lark
 from core.models import FundDataResult, DISCLAIMER
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ class FeishuAdapter(BaseAdapter):
 
         sorted_funds = sorted(
             data.funds,
-            key=lambda f: self._to_float(f.return_1y) or float("-inf"),
+            key=lambda f: to_float(f.return_1y) if to_float(f.return_1y) is not None else float("-inf"),
             reverse=True,
         )
 
@@ -91,10 +92,10 @@ class FeishuAdapter(BaseAdapter):
             if fund._cross_validated:
                 cross_mark = ' ✅'
 
-            r1y_val = self._to_float(fund.return_1y)
+            r1y_val = to_float(fund.return_1y)
             if r1y_val is not None:
                 r1y_color = "red" if r1y_val > 0 else "green"
-                r1y_display = f'<font color="{r1y_color}">{self._fmt_return(fund.return_1y)}</font>'
+                r1y_display = f'<font color="{r1y_color}">{fmt_return(fund.return_1y)}</font>'
             else:
                 r1y_display = "-"
 
@@ -125,7 +126,7 @@ class FeishuAdapter(BaseAdapter):
             # T-1 估值预测（如果启用且数据有效）
             pred = fund._t1_prediction or {}
             if pred:
-                pred_text = self._format_prediction_lark(pred)
+                pred_text = format_prediction_lark(pred)
                 if pred_text:
                     elements.append({
                         "tag": "div",
@@ -173,7 +174,7 @@ class FeishuAdapter(BaseAdapter):
         lines = [f"QDII 基金数据 {data.update_date}", ""]
         for fund in data.funds:
             name = fund.short_name or fund.name
-            r1y = self._fmt_return(fund.return_1y)
+            r1y = fmt_return(fund.return_1y)
             status = fund.purchase_status
             lines.append(f"  {fund.code} {name}")
             lines.append(f"    近1年:{r1y} 申购:{status}")
@@ -187,37 +188,6 @@ class FeishuAdapter(BaseAdapter):
             "msg_type": "text",
             "content": {"text": "\n".join(lines)},
         }
-
-    @staticmethod
-    def _to_float(val) -> float | None:
-        if val is None:
-            return None
-        try:
-            return float(str(val).replace("%", "").replace(",", "").strip()) or None
-        except (ValueError, TypeError):
-            return None
-
-    @staticmethod
-    def _fmt_return(val, invert: bool = False) -> str:
-        v = FeishuAdapter._to_float(val)
-        if v is None:
-            return "-"
-        sign = "+" if v > 0 else ""
-        return f"{sign}{v:.2f}%"
-
-    @staticmethod
-    def _format_prediction_lark(pred: dict) -> str:
-        if not pred:
-            return ""
-        val = pred.get("value")
-        if val is None:
-            return ""
-        nav_date = pred.get("date", "")
-        is_est = pred.get("is_estimate", False)
-        sign = "+" if val > 0 else ""
-        color = "red" if val > 0 else "green"
-        suffix = "（估算，仅供参考）" if is_est else ""
-        return f'{nav_date} 涨跌: <font color="{color}">{sign}{val:.2f}%</font>{suffix}'
 
 
 register(FeishuAdapter.name, FeishuAdapter)

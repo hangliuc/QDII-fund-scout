@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 from adapters import BaseAdapter, register
+from adapters._format import to_float, fmt_return, format_prediction_wxmd
 from core.models import FundDataResult, DISCLAIMER
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ class WechatAdapter(BaseAdapter):
 
         sorted_funds = sorted(
             data.funds,
-            key=lambda f: WechatAdapter._to_float(f.return_1y) or float("-inf"),
+            key=lambda f: to_float(f.return_1y) if to_float(f.return_1y) is not None else float("-inf"),
             reverse=True,
         )
 
@@ -80,10 +81,10 @@ class WechatAdapter(BaseAdapter):
             if fund._cross_validated:
                 cross_mark = ' ✅'
 
-            r1y_val = WechatAdapter._to_float(fund.return_1y)
+            r1y_val = to_float(fund.return_1y)
             if r1y_val is not None:
                 r1y_color = "warning" if r1y_val > 0 else "info"
-                r1y_line = f'近1年: <font color="{r1y_color}">{WechatAdapter._fmt_return(fund.return_1y)}</font>'
+                r1y_line = f'近1年: <font color="{r1y_color}">{fmt_return(fund.return_1y)}</font>'
             else:
                 r1y_line = "近1年: -"
 
@@ -104,7 +105,7 @@ class WechatAdapter(BaseAdapter):
             pred = fund._t1_prediction or {}
             pred_line = ""
             if pred:
-                p_text = WechatAdapter._format_prediction_md(pred)
+                p_text = format_prediction_wxmd(pred)
                 if p_text:
                     pred_line = "\n" + p_text
 
@@ -128,12 +129,12 @@ class WechatAdapter(BaseAdapter):
         lines = [f"{title} {data.update_date}  ·  共 {data.count} 只基金", ""]
         sorted_funds = sorted(
             data.funds,
-            key=lambda f: WechatAdapter._to_float(f.return_1y) or float("-inf"),
+            key=lambda f: to_float(f.return_1y) if to_float(f.return_1y) is not None else float("-inf"),
             reverse=True,
         )
         for idx, fund in enumerate(sorted_funds):
             name = fund.short_name or fund.name or "-"
-            r1y = WechatAdapter._fmt_return(fund.return_1y)
+            r1y = fmt_return(fund.return_1y)
             status = fund.purchase_status
             limit = fund.purchase_limit or "-"
             if not fund.purchase_limit or fund.purchase_limit in ("无限制", ""):
@@ -150,37 +151,6 @@ class WechatAdapter(BaseAdapter):
             "msgtype": "text",
             "text": {"content": "\n".join(lines)},
         }
-
-    @staticmethod
-    def _to_float(val) -> float | None:
-        if val is None:
-            return None
-        try:
-            return float(str(val).replace("%", "").replace(",", "").strip()) or None
-        except (ValueError, TypeError):
-            return None
-
-    @staticmethod
-    def _fmt_return(val, invert: bool = False) -> str:
-        v = WechatAdapter._to_float(val)
-        if v is None:
-            return "-"
-        sign = "+" if v > 0 else ""
-        return f"{sign}{v:.2f}%"
-
-    @staticmethod
-    def _format_prediction_md(pred: dict) -> str:
-        if not pred:
-            return ""
-        val = pred.get("value")
-        if val is None:
-            return ""
-        nav_date = pred.get("date", "")
-        is_est = pred.get("is_estimate", False)
-        sign = "+" if val > 0 else ""
-        color = "warning" if val > 0 else "info"
-        suffix = "（估算，仅供参考）" if is_est else ""
-        return f'{nav_date} 涨跌: <font color="{color}">{sign}{val:.2f}%</font>{suffix}'
 
 
 register(WechatAdapter.name, WechatAdapter)

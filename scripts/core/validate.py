@@ -103,7 +103,7 @@ RANGE_RULES = {
     "service_fee":         {"min": 0, "max": 5, "fatal": False},
     "total_fee":           {"min": 0, "max": 5, "fatal": True},
     "tracking_error":      {"min": 0, "max": 30, "fatal": False},
-    "drawdown_1y":         {"min": 0, "max": 90, "fatal": False},
+    "drawdown_1y":         {"min": 0, "max": 1.0, "fatal": False},
     "manager_tenure":      {"min": 0, "max": 30, "fatal": False},
     "manager_return":      {"min": -100, "max": 500, "fatal": False},
 }
@@ -202,7 +202,15 @@ def check_consistency(entry: dict, result: ValidationResult, code: str = "") -> 
         if abs(expected - total) > 0.02:
             cv("费率合计", f"total_fee={total} != mgmt+custody+service={expected}")
 
-    if "C" in name and (service is None or service == 0):
+    # C 类份额检查：仅当基金简称末位字母为 C，且不是 ETF 联接才需要 service_fee
+    # 之前用 "C" in name 会把"建信新兴市场混合A"也命中（因有 C 字符），属误报
+    name_clean = name.strip()
+    is_c_share = (
+        name_clean.endswith("C")
+        or name_clean.endswith("(C)")
+        or name_clean.endswith("（C）")
+    ) and "ETF联接" not in name_clean
+    if is_c_share and (service is None or service == 0):
         cv("费率/C类", "C类基金应有 service_fee")
 
     top10 = entry.get("top10_holdings") or []

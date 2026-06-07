@@ -40,6 +40,12 @@ HEADERS = {
 JJJZ_URL = "https://fund.eastmoney.com/Data/Fund_JJJZ_Data.aspx"
 RANKING_URL = "http://fund.eastmoney.com/data/rankhandler.aspx"
 
+# enrich 字段（scale / 费率 / 回撤）的进程级缓存。
+# 避免 UI 反复 compare 时重复拉档案页和 NAV 历史。
+# 这些字段在一日之内基本不变，5 分钟 TTL 足够安全。
+_ENRICH_CACHE: dict[str, tuple[dict, float]] = {}
+_ENRICH_TTL_SECONDS = 5 * 60
+
 
 def _safe_float(v) -> Optional[float]:
     if v in (None, "", "-", "--"):
@@ -91,11 +97,19 @@ class BulkSnapshot:
     def _load_jjjz(self) -> None:
         """JJJZ: 限购状态 + 净值 + 日限额"""
         params = {"t": "8", "page": "1,50000", "js": "reData", "sort": "fcode,asc"}
-        try:
-            resp = requests.get(JJJZ_URL, params=params, headers=HEADERS, timeout=self.timeout)
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            raise SourceError("eastmoney_bulk", f"JJJZ 请求失败: {e}") from e
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                resp = requests.get(JJJZ_URL, params=params, headers=HEADERS, timeout=self.timeout)
+                resp.raise_for_status()
+                last_err = None
+                break
+            except requests.RequestException as e:
+                last_err = e
+                logger.warning("JJJZ 请求失败 (attempt %d/3): %s", attempt + 1, e)
+                time.sleep(1.0 * (attempt + 1))
+        if last_err is not None:
+            raise SourceError("eastmoney_bulk", f"JJJZ 请求失败（重试 3 次）: {last_err}") from last_err
 
         m = re.search(r"datas:(\[.*?\]\])\s*,", resp.text, re.DOTALL)
         if not m:
@@ -117,13 +131,22 @@ class BulkSnapshot:
             "qdii": "", "tabSubtype": ",,,,,",
             "pi": "1", "pn": "50000", "dx": "0",
         }
-        try:
-            resp = requests.get(RANKING_URL, params=params,
-                                headers={**HEADERS, "Referer": "http://fund.eastmoney.com/data/fundranking.html"},
-                                timeout=self.timeout)
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            logger.warning("RANKING 请求失败（非致命）: %s", e)
+        resp = None
+        for attempt in range(3):
+            try:
+                resp = requests.get(
+                    RANKING_URL, params=params,
+                    headers={**HEADERS, "Referer": "http://fund.eastmoney.com/data/fundranking.html"},
+                    timeout=self.timeout,
+                )
+                resp.raise_for_status()
+                break
+            except requests.RequestException as e:
+                logger.warning("RANKING 请求失败 (attempt %d/3): %s", attempt + 1, e)
+                resp = None
+                time.sleep(1.0 * (attempt + 1))
+        if resp is None:
+            logger.warning("RANKING 多次失败（非致命）")
             return
 
         m = re.search(r'datas:\[(.*?)\]', resp.text, re.DOTALL)
@@ -222,6 +245,19 @@ class BulkSnapshot:
         """
         if info.data_unavailable:
             return
+        # 进程级 enrich 缓存：5 分钟 TTL
+        # 复用相同 code 多次 compare 时跳过重复网络
+        cached = _ENRICH_CACHE.get(info.code)
+        if cached is not None:
+            cached_data, cached_at = cached
+            if time.time() - cached_at < _ENRICH_TTL_SECONDS:
+                # 命中：把缓存值复制过来（仅当当前 info 没值时）
+                for k in ("scale", "mgmt_fee", "custody_fee", "service_fee",
+                          "total_fee", "drawdown_1y"):
+                    if getattr(info, k, None) is None and cached_data.get(k) is not None:
+                        setattr(info, k, cached_data[k])
+                return
+
         code = info.code
         headers = {"User-Agent": "Mozilla/5.0", "Referer": "http://fund.eastmoney.com/"}
 
@@ -254,44 +290,25 @@ class BulkSnapshot:
         # 2) NAV API: 近 1 年回撤（需要 ~250 条 NAV 数据）
         if info.drawdown_1y is None:
             try:
-                import json, time
                 from datetime import datetime, timedelta
+                from core.sources.eastmoney_nav import fetch_nav_pages, calc_max_drawdown
                 today = datetime.now().strftime("%Y-%m-%d")
                 start = (datetime.now() - timedelta(days=400)).strftime("%Y-%m-%d")
-                all_navs = []
-                for page in range(1, 14):
-                    nav_url = (
-                        f"https://api.fund.eastmoney.com/f10/lsjz"
-                        f"?callback=jQuery&fundCode={code}&pageIndex={page}"
-                        f"&pageSize=20&startDate={start}&endDate={today}"
-                    )
-                    r = requests.get(nav_url, headers=headers, timeout=timeout)
-                    t = r.text.strip()
-                    if t.startswith("jQuery(") and t.endswith(")"):
-                        t = t[7:-1]
-                    d = json.loads(t)
-                    items = (d.get("Data", {}) or {}).get("LSJZList", [])
-                    for it in items:
-                        try:
-                            nav = float(it.get("DWJZ", "0"))
-                            date = it.get("FSRQ", "")
-                            if nav > 0 and date:
-                                all_navs.append((date, nav))
-                        except (ValueError, TypeError):
-                            continue
-                    if len(items) < 20:
-                        break
-                if all_navs:
-                    all_navs.sort(key=lambda x: x[0])
-                    # 从 start 算最大回撤
-                    peak = all_navs[0][1]
-                    max_dd = 0.0
-                    for _, nav in all_navs:
-                        if nav > peak:
-                            peak = nav
-                        dd = (peak - nav) / peak
-                        if dd > max_dd:
-                            max_dd = dd
-                    info.drawdown_1y = round(max_dd, 6)
+                rows = fetch_nav_pages(code, start, today, max_pages=14, timeout=timeout)
+                if rows:
+                    info.drawdown_1y = calc_max_drawdown(rows)
             except Exception:
                 pass
+
+        # 写入缓存
+        _ENRICH_CACHE[info.code] = (
+            {
+                "scale": info.scale,
+                "mgmt_fee": info.mgmt_fee,
+                "custody_fee": info.custody_fee,
+                "service_fee": info.service_fee,
+                "total_fee": info.total_fee,
+                "drawdown_1y": info.drawdown_1y,
+            },
+            time.time(),
+        )

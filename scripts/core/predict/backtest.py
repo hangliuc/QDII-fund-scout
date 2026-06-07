@@ -2,7 +2,6 @@
 """回测引擎：用真实 NAV 序列评估各模型误差"""
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -10,7 +9,6 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import requests
 
 from core.predict.models import (
     Top10OnlyModel,
@@ -21,66 +19,22 @@ from core.predict.models import (
 )
 from core.predict.predictor import Predictor
 from core.predict.models.base import FundExposure
+from core.sources.eastmoney_nav import fetch_nav_pages
 
 logger = logging.getLogger(__name__)
-
-
-NAV_API_HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Referer": "http://fund.eastmoney.com/",
-}
-NAV_API_URL = (
-    "https://api.fund.eastmoney.com/f10/lsjz"
-    "?callback=jQuery&fundCode={code}&pageIndex={page}"
-    "&pageSize=20&startDate={start}&endDate={end}"
-)
 
 
 def fetch_nav_series(code: str, start: str, end: str) -> pd.DataFrame:
     """拉取真实 NAV 序列（带涨跌幅）
 
     返回 DataFrame，列: date, nav, change_pct
-    change_pct 来自天天基金 API 原始字段，已经是基金会计的官方涨跌幅
+    change_pct 已经是小数（0.01 = 1%），与 base._safe_pct_change 输出一致。
     """
-    rows: list[dict] = []
-    for page in range(1, 30):  # 上限 30 页 = 600 条，覆盖 2 年多
-        try:
-            resp = requests.get(
-                NAV_API_URL.format(code=code, page=page, start=start, end=end),
-                headers=NAV_API_HEADERS,
-                timeout=20,
-            )
-        except requests.RequestException as e:
-            logger.warning("NAV API 请求失败 page=%d: %s", page, e)
-            break
-        text = resp.text.strip()
-        if text.startswith("jQuery(") and text.endswith(")"):
-            text = text[7:-1]
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as e:
-            logger.warning("NAV API JSON 解析失败: %s", e)
-            break
-        items = (data.get("Data", {}) or {}).get("LSJZList", [])
-        if not items:
-            break
-        for it in items:
-            try:
-                nav = float(it.get("DWJZ", "0"))
-                date = it.get("FSRQ", "")
-                jz = it.get("JZZZL", "")
-                change_pct = float(jz) / 100.0 if jz and jz not in ("", "None") else None
-                rows.append({"date": date, "nav": nav, "change_pct": change_pct})
-            except (ValueError, TypeError):
-                continue
-        # 如果不足一页，就到底了
-        if len(items) < 20:
-            break
+    rows = fetch_nav_pages(code, start, end, max_pages=30, page_size=20)
     if not rows:
         return pd.DataFrame(columns=["date", "nav", "change_pct"])
     df = pd.DataFrame(rows)
-    df = df.drop_duplicates(subset=["date"])
-    df = df.sort_values("date").reset_index(drop=True)
+    df = df.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
     return df
 
 

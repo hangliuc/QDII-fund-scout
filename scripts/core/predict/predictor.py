@@ -2,16 +2,13 @@
 """预测调度器：组装基金暴露 + 拉取行情 + 调用模型"""
 from __future__ import annotations
 
-import io
-import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
-import pdfplumber
-import requests
 
 from core.predict.models import (
     BaseModel,
@@ -28,10 +25,21 @@ from core.predict.models.hybrid import (
 )
 from core.predict.models.region_proxy import DEFAULT_REGION_ETF
 from core.quotes import QuoteSource, map_holding_to_ticker
-from core.sources.csrc import CSRCSource, CSRC_PDF_URL, CSRC_HEADERS
+from core.sources.csrc import CSRCSource
 from core.sources.eastmoney import EastMoneySource
 
 logger = logging.getLogger(__name__)
+
+
+# 进程级 cash_pct 缓存：按 instance_id 索引
+# pdfplumber 解析每份 PDF 要 1-2 秒，重复解析是构建多基金 exposure 的最大瓶颈
+_CASH_PCT_CACHE: dict[str, float] = {}
+
+# 进程级 exposure 缓存：按 (fund_code, main_code, report_year) 索引
+# 季报披露后持仓在 90 天内不变，30 分钟 TTL 足够。
+# UI 反复 compare 时跳过 build_exposure 的 holdings + cash_pct + 兜底逻辑。
+_EXPOSURE_CACHE: dict[tuple, tuple[object, float]] = {}
+_EXPOSURE_TTL_SECONDS = 30 * 60
 
 
 class Predictor:
@@ -70,6 +78,26 @@ class Predictor:
             main_code = fund_code
         if report_year is None:
             report_year = datetime.now().year
+
+        # 进程级缓存：30 分钟 TTL（季报披露后 90 天内不变）
+        cache_key = (fund_code, main_code, report_year)
+        cached = _EXPOSURE_CACHE.get(cache_key)
+        if cached is not None:
+            exp, cached_at = cached
+            if time.time() - cached_at < _EXPOSURE_TTL_SECONDS:
+                return exp
+
+        result = self._build_exposure_uncached(fund_code, main_code, short_name, report_year)
+        _EXPOSURE_CACHE[cache_key] = (result, time.time())
+        return result
+
+    def _build_exposure_uncached(
+        self,
+        fund_code: str,
+        main_code: str,
+        short_name: str,
+        report_year: int,
+    ) -> FundExposure:
 
         # 1) Top10 持仓 (eastmoney) - 取当年的最新季报
         quarters = self.em._fetch_holdings(fund_code, report_year)
@@ -254,41 +282,52 @@ class Predictor:
         return None
 
     def _fetch_cash_pct(self, main_code: str, short_name: str = "") -> float:
-        """从 CSRC PDF 中抓取"银行存款和结算备付金"占基金净值比例"""
+        """从 CSRC PDF 中抓取"银行存款和结算备付金"占基金净值比例。
+
+        使用 csrc 已有的下载/缓存机制（避免重复下载和重复 pdfplumber.open）。
+        进程级缓存：按 instance_id 索引（季报披露后 PDF 不变）。
+        """
         try:
             rec = self.csrc.search_report(main_code, short_name)
             if not rec:
                 return 0.0
             iid = str(rec.get("uploadInfoId", ""))
-            resp = requests.get(
-                CSRC_PDF_URL.format(iid=iid),
-                headers=CSRC_HEADERS,
-                timeout=45,
-            )
-            if resp.status_code != 200 or not resp.content.startswith(b"%PDF"):
+            # 进程级缓存命中（pdfplumber 解析最慢的一步）
+            if iid in _CASH_PCT_CACHE:
+                return _CASH_PCT_CACHE[iid]
+
+            pdf_bytes = self.csrc._download_pdf(iid)
+            if not pdf_bytes:
                 return 0.0
-            with pdfplumber.open(io.BytesIO(resp.content)) as pdf:
-                for page in pdf.pages:
-                    text = page.extract_text() or ""
-                    if "银行存款" in text:
-                        # 形如 "7 银行存款和结算备付金合计 1,605,640,786.09 15.84"
-                        m = re.search(
-                            r"银行存款[^\n]*?[\d,，.]+\s+([\d.]+)\s*$",
-                            text,
-                            re.MULTILINE,
-                        )
-                        if m:
-                            return float(m.group(1)) / 100.0
-                        # 备用：行内匹配
-                        for ln in text.split("\n"):
-                            if "银行存款" in ln:
-                                nums = re.findall(r"[\d,]+\.\d+", ln)
-                                if nums:
-                                    try:
-                                        # 最后一个数字一般是百分比
-                                        return float(nums[-1].replace(",", "")) / 100.0
-                                    except ValueError:
-                                        pass
+            all_text = self.csrc._extract_pdf_text(pdf_bytes)
+            if not all_text or "银行存款" not in all_text:
+                _CASH_PCT_CACHE[iid] = 0.0
+                return 0.0
+            # 形如 "7 银行存款和结算备付金合计 1,605,640,786.09 15.84"
+            m = re.search(
+                r"银行存款[^\n]*?[\d,，.]+\s+([\d.]+)\s*$",
+                all_text,
+                re.MULTILINE,
+            )
+            if m:
+                try:
+                    val = float(m.group(1)) / 100.0
+                    _CASH_PCT_CACHE[iid] = val
+                    return val
+                except ValueError:
+                    pass
+            # 备用：行内匹配
+            for ln in all_text.split("\n"):
+                if "银行存款" in ln:
+                    nums = re.findall(r"[\d,]+\.\d+", ln)
+                    if nums:
+                        try:
+                            val = float(nums[-1].replace(",", "")) / 100.0
+                            _CASH_PCT_CACHE[iid] = val
+                            return val
+                        except ValueError:
+                            pass
+            _CASH_PCT_CACHE[iid] = 0.0
         except Exception as e:
             logger.warning("拉取现金占比失败：%s", e)
         return 0.0
