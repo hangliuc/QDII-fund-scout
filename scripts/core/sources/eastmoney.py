@@ -225,15 +225,25 @@ class EastMoneySource(BaseSource):
     def _parse_archive_page(self, html: str, code: str) -> dict:
         info: dict = {}
 
-        m = re.search(r"管理费率.*?([\d.]+)%", html)
+        # 解析费率：正则限制在紧随 <th>标签</th> 后的第一个 <td>...</td> 内，
+        # 避免跨过 "---" 这种空值后误抓到下一字段。
+        fee_re = (
+            r'{label}\s*</th>\s*<td[^>]*>'
+            r'\s*(?:<[^>]+>\s*)*'
+            r'([\d.]+)\s*%'
+        )
+        m = re.search(fee_re.format(label='管理费率'), html)
         if m:
             info["mgmt_fee"] = float(m.group(1))
-        m = re.search(r"托管费率.*?([\d.]+)%", html)
+        m = re.search(fee_re.format(label='托管费率'), html)
         if m:
             info["custody_fee"] = float(m.group(1))
-        m = re.search(r"销售服务费率.*?([\d.]+)%", html)
+        m = re.search(fee_re.format(label='销售服务费率'), html)
         if m:
             info["service_fee"] = float(m.group(1))
+        else:
+            # 销售服务费率为 "---" 或未列出 → 该费率 0（A 类基金常见）
+            info["service_fee"] = 0.0
         m = re.search(r"跟踪标的.*?<td[^>]*>(.*?)</td>", html, re.DOTALL)
         if m:
             info["benchmark"] = self._strip_tags(m.group(1))[:60]

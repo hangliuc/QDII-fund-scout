@@ -280,15 +280,26 @@ class BulkSnapshot:
                 info.custody_fee = None
                 info.service_fee = None
                 info.total_fee = None
-                m = re.search(r'管理费率.*?([\d.]+)%', text)
+                # 解析费率：正则限制在紧随 <th>标签</th> 后的第一个 <td>...</td> 内，
+                # 避免跨过 "---" 这种空值后误抓到下一字段（如最高认购费率）。
+                # 例如 002891 销售服务费率是 ---，老正则 '.*?(\d+)%' 会跳到 1.20%（认购费）。
+                fee_re = (
+                    r'{label}\s*</th>\s*<td[^>]*>'   # th 闭合 + td 开始
+                    r'\s*(?:<[^>]+>\s*)*'              # 可选嵌套标签
+                    r'([\d.]+)\s*%'                    # 数字+%
+                )
+                m = re.search(fee_re.format(label='管理费率'), text)
                 if m:
                     info.mgmt_fee = float(m.group(1))
-                m = re.search(r'托管费率.*?([\d.]+)%', text)
+                m = re.search(fee_re.format(label='托管费率'), text)
                 if m:
                     info.custody_fee = float(m.group(1))
-                m = re.search(r'销售服务费率.*?([\d.]+)%', text)
+                m = re.search(fee_re.format(label='销售服务费率'), text)
                 if m:
                     info.service_fee = float(m.group(1))
+                else:
+                    # 没匹配到数字百分比 → 该费率为 0（典型情形："---（每年）"）
+                    info.service_fee = 0.0
                 fees = [info.mgmt_fee or 0, info.custody_fee or 0, info.service_fee or 0]
                 if any(f > 0 for f in fees):
                     info.total_fee = round(sum(fees), 4)
