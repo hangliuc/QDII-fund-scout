@@ -668,6 +668,18 @@ def cmd_search(args: argparse.Namespace) -> None:
     if args.cls:
         results = [r for r in results if args.cls in r.get("name", "")]
 
+    # --with-limits / --details: 自动 follow up 调 compare 拿真实限额数据
+    # 这样 agent 一条命令就能拿到完整字段，避免误把 search 清单当详情展示。
+    if args.with_limits and results:
+        codes = [r["code"] for r in results[:args.limit]]  # 不超过 limit 只
+        try:
+            funds = fetcher.fetch_batch(codes, include_prediction=False)
+            # 用 compare 结果替换 search 清单（保留代码顺序）
+            funds_dict = {f.code: f.to_dict() for f in funds}
+            results = [funds_dict[c] for c in codes if c in funds_dict]
+        except Exception as e:
+            print(f"⚠ 拉取详情失败: {e}", file=sys.stderr)
+
     data = {
         "update_date": time.strftime("%Y-%m-%d"),
         "count": len(results),
@@ -684,7 +696,10 @@ def cmd_search(args: argparse.Namespace) -> None:
 
     # search 只返回基金清单（不含详情字段），不支持推送
     if args.push:
-        print("⚠ search 命令不支持 --push，请先用 compare 拉取详情后再推送")
+        if not args.with_limits:
+            print("⚠ search 命令默认不含详情，--push 不支持。先用 --with-limits 拉详情，或改用 compare。")
+        else:
+            print("⚠ search 命令不支持 --push，请用 compare 命令推送。")
 
 
 def cmd_validate(args: argparse.Namespace) -> None:
@@ -744,6 +759,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("keyword", help="搜索关键词")
     p_search.add_argument("--type", default="", help="基金类型筛选")
     p_search.add_argument("--class", dest="cls", default="", help="份额类别筛选 (A/C)")
+    p_search.add_argument("--with-limits", action="store_true",
+                          help="自动跟进 compare 拿真实限额、收益率、费率（推荐 agent 用法）")
+    p_search.add_argument("--limit", type=int, default=20,
+                          help="--with-limits 时最多拉详情的基金数量（默认 20）")
     _add_common_args(p_search)
     p_search.set_defaults(func=cmd_search)
 

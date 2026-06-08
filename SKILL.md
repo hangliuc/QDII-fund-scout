@@ -17,7 +17,8 @@ description: "查询 QDII 基金数据（限额、净值、收益率、回撤、
 |---------|------------|
 | 查询单只 QDII 详情 + 季报 + 持仓 | `cli.py detail {code} --holdings --csrc` |
 | 批量对比多只 QDII | `cli.py compare {codes}` 或 `--config ~/.fund-scout/config.json` |
-| 按关键词找基金（指数 / 主题） | `cli.py search "纳斯达克100" --type QDII` |
+| 按关键词找基金 + **拿真实限额数据** | **`cli.py search "纳斯达克100" --type QDII --class C --with-limits`** |
+| 仅按关键词列出基金代码（不带详情）| `cli.py search "纳斯达克100" --type QDII` |
 | 推送到飞书 / 企业微信 | `--push feishu` / `--push wechat` / `--push feishu,wechat` |
 | 校验已有数据文件 | `cli.py validate data.json --profile qdii` |
 | 预测尚未公布的当日 NAV 涨跌 | `predict_cli.py {code}` 或 `compare ... --format json`（含 `t1_prediction`）|
@@ -26,6 +27,11 @@ description: "查询 QDII 基金数据（限额、净值、收益率、回撤、
 | Python 集成 | `from core.fetcher import FundFetcher` / `from core.predict import Predictor` |
 | 数据可视化（小红书图卡） | **不在本 skill 范围**，转 xhs-fund-holdings-analysis |
 | 投资建议 / 合规审查 | **不做**，只输出数据 |
+
+> ⚠️ **重要**：`cli.py search` 默认只返回基金代码 + 名称 + 类型 + 拼音（来自 fundcode_search.js），
+> **不含限额、收益率、费率、规模等核心字段**。如果用户问"列出限额情况"等，
+> 必须用 `--with-limits`，或先 search 拿代码再 `compare` 拿详情。
+> **禁止**直接拿 search 的结果当详情展示给用户（会让申购状态显示为空或错误）。
 
 ---
 
@@ -349,8 +355,11 @@ python3 cli.py detail 012870 [--holdings] [--csrc] [--format json|csv|md]
 python3 cli.py compare 012870,006479,008971 [--config PATH] [--style table|card|summary]
                                             [--format md|json|csv] [--push feishu,wechat]
 
-# 关键词搜索（仅返回基金清单，不含详情；不支持 --push）
+# 关键词搜索
+# 默认仅返回基金清单（代码 / 名称 / 类型 / 拼音），不含详情
 python3 cli.py search "纳斯达克100" --type QDII --class C
+# 推荐：自动跟进 compare 拿到真实限额、收益率、费率（agent 用此选项）
+python3 cli.py search "纳斯达克100" --type QDII --class C --with-limits [--limit 20]
 
 # 用户基金列表（agent 维护持久化）
 python3 cli.py funds list [--format text|json]
