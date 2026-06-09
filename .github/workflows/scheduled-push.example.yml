@@ -22,10 +22,19 @@ name: QDII Scheduled Push (example)
 
 on:
   schedule:
-    # 工作日 UTC 01:00 = 北京 09:00 (开盘前)
-    - cron: "0 1 * * 1-5"
-    # 工作日 UTC 07:30 = 北京 15:30 (收盘后) — 取消注释即生效
-    # - cron: "30 7 * * 1-5"
+    # ⚠ GitHub Actions cron 是 "best-effort"，不保证精确触发。
+    #   官方文档：https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule
+    #   实测可能延迟 30 分钟到 4+ 小时（fork 仓库 + UTC 整点尤其明显）。
+    #   缓解措施:
+    #   1) 避开整点 / 半点。用 "17 0 * * 1-5" 而不是 "0 1 * * 1-5"
+    #   2) 多打几个时间点（任何一次成功就好），但要自己去重避免重复推送
+    #   3) 真要分钟级精确, 用 Cloudflare Workers Cron / 云函数 / cron-job.org
+    #      触发 workflow_dispatch
+    #
+    # 错峰示例：UTC 00:17 = 北京 08:17（开盘前 1 小时左右触发）
+    - cron: "17 0 * * 1-5"
+    # 工作日 UTC 07:32 = 北京 15:32 (收盘后) — 取消注释即生效
+    # - cron: "32 7 * * 1-5"
   workflow_dispatch:  # 允许手动触发（Actions 页面一键运行）
 
 jobs:

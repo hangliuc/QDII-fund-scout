@@ -183,9 +183,14 @@ for fund in result.funds:
 3. 复制 `.github/workflows/scheduled-push.example.yml` 为 `.github/workflows/scheduled-push.yml`（去掉 `.example`）
 4. 提交到 `main` 分支，GitHub Actions 自动按时跑，结果直接推到你的群
 
-> 默认 cron 是工作日北京 09:00（UTC 01:00），可在 yml 里改。  
-> 也可以在仓库 Actions 页面 **手动触发**一次（workflow_dispatch）测试。  
+> 默认 cron 是工作日北京 08:17（UTC 00:17 错峰），可在 yml 里改。
+> 也可以在仓库 Actions 页面 **手动触发**一次（workflow_dispatch）测试。
 > 你的基金清单在 Secret 里，仓库公开也不会泄露。
+>
+> ⚠️ **触发延迟提示**：GitHub Actions scheduled cron 是 best-effort，不保证准点。
+> 实测可能延迟 30 分钟到 4+ 小时（特别是 UTC 整点 + fork 仓库）。
+> 已默认错峰到 UTC 00:17。如需分钟级精确，建议用 Cloudflare Workers Cron
+> 或腾讯云函数定时触发 `workflow_dispatch` 来兜底。
 
 ---
 
